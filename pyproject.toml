@@ -1,0 +1,18 @@
+[project]
+name = "repl-nix-workspace"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.11"
+dependencies = [
+    "google-auth>=2.40.2",
+    "google-cloud-bigquery>=3.33.0",
+    "openai>=2.14.0",
+    "openpyxl>=3.1.5",
+    "pandas>=2.2.3",
+    "python-dateutil>=2.9.0.post0",
+    "requests>=2.32.3",
+    "sift-stack-py>=0.5.3",
+    "streamlit>=1.45.1",
+    "streamlit-aggrid>=1.2.0.post1",
+    "trafilatura>=2.0.0",
+]
