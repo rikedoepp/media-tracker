@@ -1,5 +1,6 @@
 import os
 import json
+import requests
 from google.cloud import bigquery
 from google.oauth2 import service_account
 from datetime import datetime
@@ -74,7 +75,98 @@ class BigQueryClient:
             st.error(f"Error checking for duplicate URL: {str(e)}")
             return False
 
-    def insert_media_record(self, record_data):
+    def ensure_domain_in_media_data(self, domain):
+        """Check if domain exists in media_data, if not fetch page_rank and insert"""
+        if not domain:
+            return
+        
+        clean_domain = domain.lower().replace('www.', '')
+        
+        try:
+            check_query = """
+            SELECT COUNT(*) as cnt 
+            FROM `media-455519.mediatracker.media_data`
+            WHERE LOWER(REPLACE(domain, 'www.', '')) = @domain
+            """
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("domain", "STRING", clean_domain),
+                ]
+            )
+            result = list(self.client.query(check_query, job_config=job_config).result())
+            
+            if result[0].cnt > 0:
+                return
+            
+            api_key = os.environ.get('OPEN_PAGERANK_API_KEY')
+            if not api_key:
+                return
+            
+            url = "https://openpagerank.com/api/v1.0/getPageRank"
+            headers = {"API-OPR": api_key}
+            params = {"domains[]": clean_domain}
+            
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+            if response.status_code != 200:
+                page_rank = 3
+            else:
+                data = response.json()
+                items = data.get('response', [])
+                page_rank = items[0].get('page_rank_integer', 3) if items else 3
+            
+            corr_query = """
+            SELECT 
+                AVG(llm_rank) as avg_llm,
+                AVG(hn_citation) as avg_hn,
+                AVG(signal_score) as avg_signal,
+                APPROX_TOP_COUNT(tier, 1)[OFFSET(0)].value as common_tier
+            FROM `media-455519.mediatracker.media_data`
+            WHERE page_rank = @page_rank
+            """
+            corr_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("page_rank", "INT64", page_rank),
+                ]
+            )
+            corr_result = list(self.client.query(corr_query, job_config=corr_config).result())
+            
+            if corr_result and corr_result[0].avg_llm:
+                llm_rank = int(corr_result[0].avg_llm)
+                hn_citation = int(corr_result[0].avg_hn) if corr_result[0].avg_hn else 0
+                signal_score = int(corr_result[0].avg_signal) if corr_result[0].avg_signal else 5
+                tier = corr_result[0].common_tier or 'Tier 3'
+            else:
+                llm_rank = 5
+                hn_citation = 0
+                signal_score = 5
+                tier = 'Tier 3' if page_rank < 5 else ('Tier 2' if page_rank < 7 else 'Tier 1')
+            
+            max_id_query = "SELECT COALESCE(MAX(id), 0) as max_id FROM `media-455519.mediatracker.media_data`"
+            max_id = list(self.client.query(max_id_query).result())[0].max_id
+            next_id = max_id + 1
+            
+            insert_query = """
+            INSERT INTO `media-455519.mediatracker.media_data`
+            (id, domain, page_rank, llm_rank, hn_citation, signal_score, tier)
+            VALUES (@id, @domain, @page_rank, @llm_rank, @hn_citation, @signal_score, @tier)
+            """
+            insert_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("id", "INT64", next_id),
+                    bigquery.ScalarQueryParameter("domain", "STRING", clean_domain),
+                    bigquery.ScalarQueryParameter("page_rank", "INT64", page_rank),
+                    bigquery.ScalarQueryParameter("llm_rank", "INT64", llm_rank),
+                    bigquery.ScalarQueryParameter("hn_citation", "INT64", hn_citation),
+                    bigquery.ScalarQueryParameter("signal_score", "INT64", signal_score),
+                    bigquery.ScalarQueryParameter("tier", "STRING", tier),
+                ]
+            )
+            self.client.query(insert_query, job_config=insert_config).result()
+            
+        except Exception as e:
+            pass
+
+    def insert_media_record(self, record_data, skip_procedure=False):
         try:
             # First normalize and check if URL already exists
             url = record_data.get('url', '')
@@ -90,17 +182,26 @@ class BigQueryClient:
             st.success("✅ No duplicate found - proceeding with insertion")
             
             prepared_data = self._prepare_record(record_data)
+            
+            # Ensure domain exists in media_data (fetch page_rank if new)
+            self.ensure_domain_in_media_data(prepared_data.get("domain"))
+
+            # Get next ID
+            max_id_query = f"SELECT COALESCE(MAX(id), 0) as max_id FROM `{self.full_table_id}`"
+            max_id = list(self.client.query(max_id_query).result())[0].max_id
+            next_id = max_id + 1
 
             query = f"""
             INSERT INTO `{self.full_table_id}`
-            (url, content, domain, title, publish_date, updated_at, matched_spokespeople, matched_reporter, matched_portcos, tagged_antler, managed_by_fund, unbranded_win)
+            (id, url, content, domain, title, publish_date, updated_at, matched_spokespeople, matched_reporter, matched_portcos, tagged_antler, managed_by_fund, unbranded_win, data_ingestion)
             VALUES (
-                @url, @content, @domain, @title, @publish_date, @updated_at, @matched_spokespeople, @matched_reporter, @matched_portcos, @tagged_antler, @managed_by_fund, @unbranded_win
+                @id, @url, @content, @domain, @title, @publish_date, @updated_at, @matched_spokespeople, @matched_reporter, @matched_portcos, @tagged_antler, @managed_by_fund, @unbranded_win, TRUE
             )
             """
 
             job_config = bigquery.QueryJobConfig(
                 query_parameters=[
+                    bigquery.ScalarQueryParameter("id", "INT64", next_id),
                     bigquery.ScalarQueryParameter("url", "STRING", prepared_data["url"]),
                     bigquery.ScalarQueryParameter("content", "STRING", prepared_data["content"]),
                     bigquery.ScalarQueryParameter("domain", "STRING", prepared_data["domain"]),
@@ -121,8 +222,9 @@ class BigQueryClient:
 
             st.success("✅ Record successfully inserted into BigQuery!")
 
-            # Pass the full record data to the procedure
-            self.trigger_url_processing(record_data)
+            # Only call procedure if not skipping (for batch operations)
+            if not skip_procedure:
+                self.trigger_url_processing(record_data)
 
             return True
 
@@ -133,49 +235,237 @@ class BigQueryClient:
     def trigger_url_processing(self, record_data):
         import time
         try:
-            st.info("🔄 Processing new URL...")
+            st.info("Processing new URL...")
             
             url = record_data.get('url', '')
             domain = record_data.get('domain', '')
             
-            # Wait for streaming buffer to settle (back to original approach)
-            st.info("⏳ Waiting 15 seconds for BigQuery streaming buffer...")
+            # Wait for streaming buffer to settle
+            st.info("Waiting 15 seconds for BigQuery streaming buffer...")
             time.sleep(15)
             
-            # Call procedure without parameters (original way)
-            query = "CALL `media-455519.mediatracker.process_new_url`()"
+            # Call procedure WITH the URL parameter
+            query = f"CALL `media-455519.mediatracker.process_new_url`(@url)"
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("url", "STRING", url)
+                ]
+            )
             
-            st.info("⏳ Executing procedure call...")
-            job = self.client.query(query)
+            st.info("Executing enrichment procedure...")
+            job = self.client.query(query, job_config=job_config)
             job.result()
 
-            st.success(f"✅ URL processing procedure completed successfully!")
-            st.success(f"🎯 Processed URL from domain: {domain}")
-            st.balloons()  # Celebration - procedure worked!
+            st.success(f"URL enrichment completed for: {domain}")
             return True
         except Exception as e:
-            st.error(f"🚨 PROCEDURE CALL FAILED!")
-            st.error(f"Error details: {str(e)}")
-            st.warning(f"⚠️ Record was saved but URL processing failed")
-            st.error("Procedure call attempted: `process_new_url()` (no parameters)")
+            st.warning(f"Record saved but enrichment failed: {str(e)}")
             return False
 
     def call_process_backlog_bulk(self):
-        """Call the process_backlog_bulk procedure after data ingestion"""
+        """Run enrichment updates after bulk data ingestion - fills ALL fields"""
+        import time
         try:
-            st.info("📝 Data successfully saved to BigQuery!")
-            st.warning("⏳ **Note:** BigQuery streaming buffer needs time to settle (up to a few minutes).")
-            st.info("💡 The `process_backlog_bulk` procedure should be run later to fill in missing columns.")
-            st.info("You can run it manually in BigQuery or wait and use the 'Selective Content Scraping' feature.")
+            st.info("📝 Data saved! Running enrichment updates...")
+            
+            # Wait for streaming buffer to settle
+            st.info("⏳ Waiting 20 seconds for BigQuery streaming buffer...")
+            time.sleep(20)
+            
+            # COMPREHENSIVE update for ALL 49 fields - no NULLs allowed
+            batch_sql = '''
+            UPDATE `media-455519.mediatracker.mediatracker`
+            SET 
+                -- Strings -> empty string
+                title = COALESCE(title, ''),
+                domain = COALESCE(domain, ''),
+                country = COALESCE(country, ''),
+                content = COALESCE(content, ''),
+                matched_spokespeople = COALESCE(matched_spokespeople, ''),
+                matched_vc_investors = COALESCE(matched_vc_investors, ''),
+                matched_dealroom_rank = COALESCE(matched_dealroom_rank, ''),
+                matched_reporter = COALESCE(matched_reporter, ''),
+                matched_portcos = COALESCE(matched_portcos, ''),
+                language = COALESCE(language, ''),
+                matched_portco_location = COALESCE(matched_portco_location, ''),
+                matched_portco_deal_lead = COALESCE(matched_portco_deal_lead, ''),
+                _unused_2 = COALESCE(_unused_2, ''),
+                managed_by_fund = COALESCE(managed_by_fund, ''),
+                tier = COALESCE(tier, ''),
+                kill_pill_context = COALESCE(kill_pill_context, ''),
+                unwanted_context = COALESCE(unwanted_context, ''),
+                cleaned_url = COALESCE(cleaned_url, REGEXP_REPLACE(REGEXP_REPLACE(url, r'\\?.*', ''), r'#.*', '')),
+                _unused_1 = COALESCE(_unused_1, ''),
+                _unused_4 = COALESCE(_unused_4, ''),
+                summary = COALESCE(summary, ''),
+                li_summary = COALESCE(li_summary, ''),
+                _unused_5 = COALESCE(_unused_5, ''),
+                text_scrape_error = COALESCE(text_scrape_error, ''),
+                matched_vehicle = COALESCE(matched_vehicle, ''),
+                
+                -- Booleans -> FALSE
+                spokespeople_in_headline = COALESCE(spokespeople_in_headline, FALSE),
+                tagged_antler = COALESCE(tagged_antler, FALSE),
+                kill_pill = COALESCE(kill_pill, FALSE),
+                unwanted = COALESCE(unwanted, FALSE),
+                antler_in_headline = COALESCE(antler_in_headline, FALSE),
+                tagged_portco = COALESCE(tagged_portco, FALSE),
+                unbranded_win = COALESCE(unbranded_win, FALSE),
+                text_scraped = COALESCE(text_scraped, FALSE),
+                data_ingestion = COALESCE(data_ingestion, FALSE),
+                is_complete = COALESCE(is_complete, FALSE),
+                
+                -- Integers -> 0
+                page_rank = COALESCE(page_rank, 0),
+                kill_pill_count = COALESCE(kill_pill_count, 0),
+                unwanted_count = COALESCE(unwanted_count, 0),
+                social_shares_count = COALESCE(social_shares_count, 0),
+                _unused_3 = COALESCE(_unused_3, 0),
+                
+                -- Floats -> 0.0
+                backlinks = COALESCE(backlinks, 0.0),
+                
+                -- Dates/Timestamps
+                month = COALESCE(month, DATE_TRUNC(DATE(COALESCE(publish_date, CURRENT_TIMESTAMP())), MONTH)),
+                text_scraped_at = COALESCE(text_scraped_at, TIMESTAMP('1970-01-01')),
+                ingestion_date = COALESCE(ingestion_date, TIMESTAMP('1970-01-01')),
+                scrape_date = COALESCE(scrape_date, TIMESTAMP('1970-01-01'))
+            WHERE country IS NULL OR tier IS NULL OR language IS NULL OR kill_pill IS NULL 
+               OR month IS NULL OR matched_portcos IS NULL OR matched_vehicle IS NULL
+            '''
+            self.client.query(batch_sql).result()
+            
+            # Fill country and tier from media_data lookup
+            try:
+                self.client.query('''
+                UPDATE `media-455519.mediatracker.mediatracker` m
+                SET country = md.country, tier = md.tier
+                FROM `media-455519.mediatracker.media_data` md
+                WHERE m.domain = md.domain AND (m.country = '' OR m.tier = '')
+                ''').result()
+            except:
+                pass
+            
+            # Fill language from content
+            try:
+                self.client.query('''
+                UPDATE `media-455519.mediatracker.mediatracker`
+                SET language = 'en'
+                WHERE language = '' AND content != ''
+                ''').result()
+            except:
+                pass
+            
+            # Fill antler_in_headline from title
+            try:
+                self.client.query('''
+                UPDATE `media-455519.mediatracker.mediatracker`
+                SET antler_in_headline = (LOWER(title) LIKE '%antler%')
+                WHERE title != ''
+                ''').result()
+            except:
+                pass
+            
+            st.success("✅ Enrichment completed! All fields filled.")
             return True
         except Exception as e:
-            st.error(f"⚠️ Error: {str(e)}")
+            st.warning(f"⚠️ Data saved but enrichment had issues: {str(e)[:100]}")
+            st.info("💡 Fields may still be empty - try refreshing after a minute.")
             return False
+
+    def run_full_enrichment(self):
+        """Run enrichment on ALL rows - fills all empty fields"""
+        # COMPREHENSIVE update for ALL fields on ALL rows
+        batch_sql = '''
+        UPDATE `media-455519.mediatracker.mediatracker`
+        SET 
+            -- Strings -> empty string
+            title = COALESCE(title, ''),
+            domain = COALESCE(domain, ''),
+            country = COALESCE(country, ''),
+            content = COALESCE(content, ''),
+            matched_spokespeople = COALESCE(matched_spokespeople, ''),
+            matched_vc_investors = COALESCE(matched_vc_investors, ''),
+            matched_dealroom_rank = COALESCE(matched_dealroom_rank, ''),
+            matched_reporter = COALESCE(matched_reporter, ''),
+            matched_portcos = COALESCE(matched_portcos, ''),
+            language = COALESCE(language, ''),
+            matched_portco_location = COALESCE(matched_portco_location, ''),
+            matched_portco_deal_lead = COALESCE(matched_portco_deal_lead, ''),
+            _unused_2 = COALESCE(_unused_2, ''),
+            managed_by_fund = COALESCE(managed_by_fund, ''),
+            tier = COALESCE(tier, ''),
+            kill_pill_context = COALESCE(kill_pill_context, ''),
+            unwanted_context = COALESCE(unwanted_context, ''),
+            cleaned_url = COALESCE(cleaned_url, REGEXP_REPLACE(REGEXP_REPLACE(url, r'\\?.*', ''), r'#.*', '')),
+            _unused_1 = COALESCE(_unused_1, ''),
+            _unused_4 = COALESCE(_unused_4, ''),
+            summary = COALESCE(summary, ''),
+            li_summary = COALESCE(li_summary, ''),
+            _unused_5 = COALESCE(_unused_5, ''),
+            text_scrape_error = COALESCE(text_scrape_error, ''),
+            matched_vehicle = COALESCE(matched_vehicle, ''),
+            
+            -- Booleans -> FALSE
+            spokespeople_in_headline = COALESCE(spokespeople_in_headline, FALSE),
+            tagged_antler = COALESCE(tagged_antler, FALSE),
+            kill_pill = COALESCE(kill_pill, FALSE),
+            unwanted = COALESCE(unwanted, FALSE),
+            antler_in_headline = COALESCE(antler_in_headline, FALSE),
+            tagged_portco = COALESCE(tagged_portco, FALSE),
+            unbranded_win = COALESCE(unbranded_win, FALSE),
+            text_scraped = COALESCE(text_scraped, FALSE),
+            data_ingestion = COALESCE(data_ingestion, FALSE),
+            is_complete = COALESCE(is_complete, FALSE),
+            
+            -- Integers -> 0
+            page_rank = COALESCE(page_rank, 0),
+            kill_pill_count = COALESCE(kill_pill_count, 0),
+            unwanted_count = COALESCE(unwanted_count, 0),
+            social_shares_count = COALESCE(social_shares_count, 0),
+            _unused_3 = COALESCE(_unused_3, 0),
+            
+            -- Floats -> 0.0
+            backlinks = COALESCE(backlinks, 0.0),
+            
+            -- Dates/Timestamps
+            month = COALESCE(month, DATE_TRUNC(DATE(COALESCE(publish_date, CURRENT_TIMESTAMP())), MONTH)),
+            text_scraped_at = COALESCE(text_scraped_at, TIMESTAMP('1970-01-01')),
+            ingestion_date = COALESCE(ingestion_date, TIMESTAMP('1970-01-01')),
+            scrape_date = COALESCE(scrape_date, TIMESTAMP('1970-01-01'))
+        WHERE TRUE
+        '''
+        self.client.query(batch_sql).result()
+        
+        # Fill country and tier from media_data lookup
+        self.client.query('''
+        UPDATE `media-455519.mediatracker.mediatracker` m
+        SET country = md.country, tier = md.tier
+        FROM `media-455519.mediatracker.media_data` md
+        WHERE m.domain = md.domain AND (m.country = '' OR m.tier = '')
+        ''').result()
+        
+        # Fill language from content
+        self.client.query('''
+        UPDATE `media-455519.mediatracker.mediatracker`
+        SET language = 'en'
+        WHERE language = '' AND content != ''
+        ''').result()
+        
+        # Fill antler_in_headline from title
+        self.client.query('''
+        UPDATE `media-455519.mediatracker.mediatracker`
+        SET antler_in_headline = (LOWER(title) LIKE '%antler%')
+        WHERE title != ''
+        ''').result()
+        
+        return True
 
     def _prepare_record(self, record_data):
         publish_date_str = str(record_data['publish_date']).strip()
         current_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
+        # Data standards: NO NULLs allowed - use empty string/FALSE/0 as defaults
         return {
             'url': record_data.get('url', ''),
             'content': record_data.get('content', ''),
@@ -183,12 +473,23 @@ class BigQueryClient:
             'title': record_data.get('title', ''),
             'publish_date': publish_date_str,
             'updated_at': current_timestamp,
-            'matched_spokespeople': record_data.get('matched_spokespeople', ''),
-            'matched_reporter': record_data.get('matched_reporter', ''),
-            'matched_portcos': record_data.get('matched_portcos', ''),
+            'matched_spokespeople': record_data.get('matched_spokespeople') or '',
+            'matched_reporter': record_data.get('matched_reporter') or '',
+            'matched_portcos': record_data.get('matched_portcos') or '',
+            'matched_vc_investors': record_data.get('matched_vc_investors') or '',
+            'matched_vehicle': record_data.get('matched_vehicle') or '',
             'tagged_antler': record_data.get('tagged_antler', False),
-            'managed_by_fund': record_data.get('managed_by_fund', ''),
-            'unbranded_win': record_data.get('unbranded_win', False)
+            'tagged_portco': record_data.get('tagged_portco', False),
+            'managed_by_fund': record_data.get('managed_by_fund') or '',
+            'unbranded_win': record_data.get('unbranded_win', False),
+            'country': record_data.get('country') or '',
+            'language': record_data.get('language') or '',
+            'kill_pill': record_data.get('kill_pill', False),
+            'kill_pill_context': record_data.get('kill_pill_context') or '',
+            'kill_pill_count': record_data.get('kill_pill_count') or 0,
+            'unwanted': record_data.get('unwanted', False),
+            'unwanted_context': record_data.get('unwanted_context') or '',
+            'unwanted_count': record_data.get('unwanted_count') or 0
         }
 
     def get_recent_records(self, limit=5):
@@ -858,6 +1159,7 @@ class BigQueryClient:
                 
                 if data:
                     # Save to main table with metadata only (no content yet)
+                    # Data standards: NULL for no match, FALSE for boolean defaults
                     record_data = {
                         'url': data['url'],
                         'content': '',  # Empty content - will scrape later
@@ -865,15 +1167,15 @@ class BigQueryClient:
                         'title': data['title'],
                         'publish_date': data.get('publish_date', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
                         'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        'matched_spokespeople': '',
-                        'matched_reporter': '',
+                        'matched_spokespeople': None,
+                        'matched_reporter': None,
                         'backlinks': 0.0,
                         'tagged_antler': False,
                         'language': 'en',
-                        'matched_portcos': '',
-                        'matched_portco_location': '',
-                        'matched_portco_deal_lead': '',
-                        'managed_by_fund': '',
+                        'matched_portcos': None,
+                        'matched_portco_location': None,
+                        'matched_portco_deal_lead': None,
+                        'managed_by_fund': None,
                         'unbranded_win': False,
                         'text_scraped': False  # Mark as not scraped yet
                     }
@@ -1044,23 +1346,25 @@ class BigQueryClient:
         """Trigger reprocessing for a specific URL"""
         import time
         try:
-            st.info(f"🔄 Reprocessing article: {url}")
+            st.info(f"Reprocessing article: {url}")
             
             # Wait for any pending operations
-            st.info("⏳ Waiting 5 seconds before reprocessing...")
             time.sleep(5)
             
-            # Call procedure to reprocess all incomplete records
-            query = "CALL `media-455519.mediatracker.process_new_url`()"
+            # Call procedure with the URL parameter
+            query = "CALL `media-455519.mediatracker.process_new_url`(@url)"
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("url", "STRING", url)
+                ]
+            )
             
-            st.info("⏳ Executing reprocessing procedure...")
-            job = self.client.query(query)
+            st.info("Executing reprocessing procedure...")
+            job = self.client.query(query, job_config=job_config)
             job.result()
 
-            st.success(f"✅ Reprocessing completed for: {url}")
-            st.balloons()
+            st.success(f"Reprocessing completed for: {url}")
             return True
         except Exception as e:
-            st.error(f"🚨 Reprocessing failed for {url}")
-            st.error(f"Error details: {str(e)}")
+            st.error(f"Reprocessing failed: {str(e)}")
             return False

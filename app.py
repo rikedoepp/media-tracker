@@ -7,9 +7,22 @@ import json
 import os
 import pandas as pd
 import time
+import uuid
 
-# Set page config for browser tab title
-st.set_page_config(page_title="Antler Media Tracker", layout="wide")
+# Set page config for browser tab title with Antler logo as favicon
+st.set_page_config(
+    page_title="Antler Media Tracker", 
+    layout="wide",
+    page_icon="attached_assets/65ce2a9e78de30b88bf3cfaf_Antler_Icon_Logo_1766073097380.png"
+)
+
+# Override Streamlit branding in browser preview
+st.markdown("""
+    <meta name="description" content="Antler Media Tracker - Track media coverage">
+    <meta property="og:title" content="Antler Media Tracker">
+    <meta property="og:description" content="Track media coverage for Antler portfolio companies">
+    <meta property="og:site_name" content="Antler Media Tracker">
+""", unsafe_allow_html=True)
 
 # Apply Antler brand styling - Satoshi font + brand colors
 st.markdown("""
@@ -241,11 +254,47 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 def main():
+    # Back link to News Monitor
+    st.markdown('''
+        <a href="https://antler-news-monitor.lovable.app" target="_blank" 
+           style="color: #132f32 !important; text-decoration: none; font-size: 14px;">
+            ← Go back to News Monitor
+        </a>
+    ''', unsafe_allow_html=True)
+    
     # Add logo and header
     col1, col2 = st.columns([1, 4])
 
     with col1:
-        st.image("attached_assets/65ce2a9e78de30b88bf3cfaf_Antler_Icon_Logo_1766073097380.png", width=50)
+        # Clickable Antler logo to reset app
+        import base64
+        with open("attached_assets/65ce2a9e78de30b88bf3cfaf_Antler_Icon_Logo_1766073097380.png", "rb") as f:
+            logo_data = base64.b64encode(f.read()).decode()
+        
+        # Check for reset trigger via query param
+        if st.query_params.get("reset") == "1":
+            st.query_params.clear()
+            if 'scraped_data' in st.session_state:
+                del st.session_state.scraped_data
+            st.session_state.clear_url_field = True
+            st.session_state.clear_multi_urls = True
+            st.rerun()
+        
+        # Logo as clickable link that triggers reset
+        st.markdown(f'''
+            <style>
+            .clickable-logo {{
+                cursor: pointer;
+                transition: opacity 0.2s;
+            }}
+            .clickable-logo:hover {{
+                opacity: 0.7;
+            }}
+            </style>
+            <a href="?reset=1" style="text-decoration: none;">
+                <img src="data:image/png;base64,{logo_data}" width="50" class="clickable-logo" title="Click to reset">
+            </a>
+        ''', unsafe_allow_html=True)
 
     with col2:
         st.markdown("""
@@ -370,7 +419,7 @@ def main():
 
     # URL input method selection
     input_method = st.radio("How would you like to add articles?", 
-                           ["Single URL", "Multiple URLs", "CSV Upload", "Data ingestion"], 
+                           ["Single URL", "Multiple URLs", "Wizikey Data Ingestion", "📊 Data Health"], 
                            horizontal=True)
     
     # Default values for all input methods
@@ -453,67 +502,7 @@ def main():
         if 'processed_count' not in st.session_state:
             st.session_state.processed_count = 0
     
-    elif input_method == "CSV Upload":
-        # CSV Upload option
-        st.write("**Upload a CSV file with URLs:**")
-        uploaded_file = st.file_uploader("Choose a CSV file", type=['csv'])
-        
-        # Initialize default values
-        scrape_clicked = False
-        urls_to_process = []
-        
-        if uploaded_file is not None:
-            try:
-                # Read CSV file
-                import pandas as pd
-                df = pd.read_csv(uploaded_file)
-                
-                # Try to find URL column
-                url_columns = [col for col in df.columns if 'url' in col.lower() or 'link' in col.lower()]
-                
-                if url_columns:
-                    url_column = st.selectbox("Select the URL column:", url_columns)
-                    urls_from_csv = df[url_column].dropna().tolist()
-                    urls_from_csv = [str(url).strip() for url in urls_from_csv if str(url).strip()]
-                    
-                    st.info(f"📄 **Found {len(urls_from_csv)} URLs in CSV**")
-                    
-                    # Check which URLs already exist and save for processing
-                    if st.button("Check & Save New URLs"):
-                        with st.spinner("Checking existing URLs in database..."):
-                            try:
-                                existing_urls = bq_client.check_existing_urls(urls_from_csv)
-                                new_urls = [url for url in urls_from_csv if url not in existing_urls]
-                                
-                                if new_urls:
-                                    # Add URLs to automatic processing queue in BigQuery
-                                    batch_name = f"{uploaded_file.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                                    
-                                    success, batch_id = bq_client.add_urls_to_processing_queue(new_urls, batch_name)
-                                    
-                                    if success:
-                                        st.session_state.current_batch = batch_id
-                                        st.info(f"📊 Skipping {len(existing_urls)} existing URLs")
-                                        
-                                        with st.expander(f"📰 View {len(new_urls)} queued articles"):
-                                            for i, url in enumerate(new_urls, 1):
-                                                st.write(f"{i}. {url}")
-                                                
-                                        # Start the auto-processing
-                                        st.session_state.start_auto_processing = True
-                                else:
-                                    st.warning("✅ All URLs already exist in database - nothing new to process!")
-                                    st.info(f"📊 Found {len(existing_urls)} existing URLs")
-                            except Exception as e:
-                                st.error(f"❌ Error checking URLs: {str(e)}")
-                
-                else:
-                    st.error("❌ No URL column found. Please ensure your CSV has a column with 'url' or 'link' in the name.")
-                    
-            except Exception as e:
-                st.error(f"❌ Error reading CSV: {str(e)}")
-    
-    elif input_method == "Data ingestion":
+    elif input_method == "Wizikey Data Ingestion":
         st.write("**Bulk import from CSV:**")
         st.caption("Upload a CSV with columns: URL, Headline, Publish Date, Publication Name, Brand")
         st.caption("Each URL will be lightly scraped to extract title, domain, and key sentences")
@@ -553,8 +542,11 @@ def main():
                             st.error("❌ No URL column found in CSV")
                             st.stop()
                         
-                        # Find brand column
+                        # Find all CSV columns (case-insensitive)
                         brand_col = next((col for col in df.columns if col.lower() in ['brand', 'content']), None)
+                        headline_col = next((col for col in df.columns if col.lower() == 'headline'), None)
+                        date_col = next((col for col in df.columns if col.lower() == 'publish date'), None)
+                        pub_name_col = next((col for col in df.columns if col.lower() == 'publication name'), None)
                         
                         all_urls = [str(row.get(url_col, '')).strip() for idx, row in df.iterrows() if pd.notna(row.get(url_col))]
                         st.info(f"🔍 Checking for duplicate URLs...")
@@ -563,13 +555,22 @@ def main():
                         if existing_urls:
                             st.warning(f"⚠️ Found {len(existing_urls)} duplicate URLs that will be skipped")
                         
-                        # Filter to new URLs only
+                        # Filter to new URLs only and extract all CSV data
                         new_rows = []
                         for idx, row in df.iterrows():
                             url_val = str(row.get(url_col, '')).strip() if url_col and pd.notna(row.get(url_col)) else ''
                             if url_val and url_val not in existing_urls:
                                 brand_val = str(row.get(brand_col, '')).strip() if brand_col and pd.notna(row.get(brand_col)) else ''
-                                new_rows.append({'url': url_val, 'brand': brand_val})
+                                headline_val = str(row.get(headline_col, '')).strip() if headline_col and pd.notna(row.get(headline_col)) else ''
+                                date_val = str(row.get(date_col, '')).strip() if date_col and pd.notna(row.get(date_col)) else ''
+                                pub_name_val = str(row.get(pub_name_col, '')).strip() if pub_name_col and pd.notna(row.get(pub_name_col)) else ''
+                                new_rows.append({
+                                    'url': url_val, 
+                                    'brand': brand_val,
+                                    'headline': headline_val,
+                                    'publish_date': date_val,
+                                    'publication_name': pub_name_val
+                                })
                         
                         if not new_rows:
                             if existing_urls:
@@ -590,43 +591,104 @@ def main():
                         rows_to_insert = []
                         errors = []
                         
+                        # Helper function to parse dates like "08 Jan 2026"
+                        def parse_csv_date(date_str):
+                            if not date_str:
+                                return None
+                            from dateutil import parser as date_parser
+                            try:
+                                parsed = date_parser.parse(date_str)
+                                return parsed.strftime('%Y-%m-%d 00:00')
+                            except:
+                                return None
+                        
                         for idx, row_data in enumerate(new_rows):
                             url_val = row_data['url']
                             brand_val = row_data['brand']
+                            csv_headline = row_data.get('headline', '')
+                            csv_date = row_data.get('publish_date', '')
+                            csv_pub_name = row_data.get('publication_name', '')
                             
                             # Update progress
                             progress = (idx + 1) / len(new_rows)
                             progress_bar.progress(progress)
-                            status_text.text(f"Scraping {idx + 1}/{len(new_rows)}: {url_val[:50]}...")
+                            status_text.text(f"Light scraping {idx + 1}/{len(new_rows)}: {url_val[:50]}...")
                             
                             try:
-                                # Light scraping - get title, domain, date, sentences mentioning Antler/brand
-                                scraped = scrape_light(url_val, brand=brand_val)
+                                # LIGHT scraping - just title, domain, date, key sentences (fast)
+                                scraped = scrape_light(url_val, brand_val)
                                 
+                                # For light scraping, accept if we got at least domain (always extractable from URL)
                                 if scraped:
                                     # Stagger timestamps
                                     row_timestamp = base_timestamp + timedelta(seconds=idx)
                                     
-                                    # Determine tagged_antler based on Brand field
-                                    tagged_antler = 'antler' in brand_val.lower() if brand_val else False
+                                    # Determine tagged_antler based on Brand field OR content
+                                    content_lower = scraped.get('content', '').lower()
+                                    title_lower = (csv_headline or scraped.get('title', '')).lower()
+                                    tagged_antler = ('antler' in brand_val.lower() if brand_val else False) or \
+                                                   'antler' in content_lower or 'antler' in title_lower
                                     
-                                    # Format publish_date with time component for BigQuery
-                                    pub_date = scraped.get('publish_date', '')
+                                    # Use CSV date if available, otherwise scraped date
+                                    pub_date = parse_csv_date(csv_date) or scraped.get('publish_date', '')
                                     if pub_date and len(pub_date) == 10:  # YYYY-MM-DD format
                                         pub_date = f"{pub_date} 00:00"  # Add time component
                                     
-                                    # Create row for BigQuery - combine scraped data with CSV brand
+                                    # Use CSV headline if available, otherwise scraped title
+                                    title = csv_headline if csv_headline else scraped.get('title', '')
+                                    
+                                    # Ensure domain exists in media_data (fetch page_rank if new)
+                                    domain = scraped.get('domain', '')
+                                    bq_client.ensure_domain_in_media_data(domain)
+                                    
+                                    # Create row for BigQuery with ALL fields - NO NULLs allowed
                                     bq_row = {
                                         'id': next_id,
                                         'url': url_val,
-                                        'title': scraped.get('title', ''),
+                                        'title': title,
                                         'publish_date': pub_date if pub_date else None,
-                                        'domain': scraped.get('domain', ''),
-                                        'content': scraped.get('content', ''),  # Light content (2-3 sentences)
+                                        'domain': domain,
+                                        'content': scraped.get('content', ''),
                                         'updated_at': row_timestamp.isoformat(),
                                         'data_ingestion': True,
                                         'tagged_antler': tagged_antler,
-                                        'matched_portcos': brand_val if (brand_val and brand_val.lower() != 'antler') else None  # Don't save "Antler" as portco
+                                        'matched_portcos': brand_val if (brand_val and brand_val.lower() != 'antler') else '',
+                                        # All fields with defaults - no NULLs
+                                        'country': '',
+                                        'matched_spokespeople': '',
+                                        'matched_vc_investors': '',
+                                        'matched_vehicle': '',
+                                        'matched_dealroom_rank': '',
+                                        'matched_reporter': '',
+                                        'matched_portco_location': '',
+                                        'matched_portco_deal_lead': '',
+                                        'language': '',
+                                        'managed_by_fund': '',
+                                        'tier': '',
+                                        'kill_pill': False,
+                                        'kill_pill_context': '',
+                                        'kill_pill_count': 0,
+                                        'unwanted': False,
+                                        'unwanted_context': '',
+                                        'unwanted_count': 0,
+                                        'tagged_portco': False,
+                                        'spokespeople_in_headline': False,
+                                        'antler_in_headline': False,
+                                        'unbranded_win': False,
+                                        'text_scraped': False,
+                                        'is_complete': False,
+                                        'cleaned_url': url_val.split('?')[0].split('#')[0],
+                                        'page_rank': 0,
+                                        'social_shares_count': 0,
+                                        'backlinks': 0.0,
+                                        'summary': '',
+                                        'li_summary': '',
+                                        'text_scrape_error': '',
+                                        '_unused_1': '',
+                                        '_unused_2': '',
+                                        '_unused_3': 0,
+                                        '_unused_4': '',
+                                        '_unused_5': ''
                                     }
                                     
                                     rows_to_insert.append(bq_row)
@@ -665,8 +727,13 @@ def main():
                                         for err in errors:
                                             st.write(f"- {err}")
                                 
-                                # Call process_backlog_bulk after successful data ingestion
-                                bq_client.call_process_backlog_bulk()
+                                # MANDATORY: Run enrichment on ALL rows - no exceptions
+                                import time
+                                with st.spinner("⏳ Waiting for BigQuery to process (20 sec)..."):
+                                    time.sleep(20)
+                                with st.spinner("🔄 Running enrichment on ALL rows..."):
+                                    bq_client.run_full_enrichment()
+                                st.success("✅ Enrichment completed - all fields filled!")
                         else:
                             st.error("❌ No rows were successfully scraped")
                             if errors:
@@ -681,6 +748,152 @@ def main():
                     
             except Exception as e:
                 st.error(f"❌ Error reading CSV: {str(e)}")
+    
+    elif input_method == "📊 Data Health":
+        st.write("**Data Completeness Dashboard**")
+        st.caption("Track which articles have all required fields filled in")
+        
+        # Run Enrichment Button - fills ALL fields for ALL rows
+        st.subheader("🔄 Run Enrichment")
+        st.caption("Fill all empty fields across ALL rows in the database")
+        if st.button("▶️ Run Enrichment Now", type="primary", key="run_enrichment_all"):
+            with st.spinner("Running enrichment on ALL rows..."):
+                try:
+                    bq_client.run_full_enrichment()
+                    st.success("✅ Enrichment completed! All fields filled for all rows.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")
+        
+        st.divider()
+        
+        # Get completeness stats for all 21 required fields
+        try:
+            completeness_query = """
+                SELECT 
+                    COUNT(*) as total,
+                    COUNTIF(id IS NOT NULL) as has_id,
+                    COUNTIF(publish_date IS NOT NULL) as has_publish_date,
+                    COUNTIF(url IS NOT NULL AND url != '') as has_url,
+                    COUNTIF(domain IS NOT NULL AND domain != '') as has_domain,
+                    COUNTIF(country IS NOT NULL) as has_country,
+                    COUNTIF(content IS NOT NULL AND content != '') as has_content,
+                    COUNTIF(matched_spokespeople IS NOT NULL) as has_matched_spokespeople,
+                    COUNTIF(matched_vc_investors IS NOT NULL) as has_matched_vc_investors,
+                    COUNTIF(matched_portcos IS NOT NULL) as has_matched_portcos,
+                    COUNTIF(tagged_antler IS NOT NULL) as has_tagged_antler,
+                    COUNTIF(language IS NOT NULL) as has_language,
+                    COUNTIF(managed_by_fund IS NOT NULL) as has_managed_by_fund,
+                    COUNTIF(kill_pill IS NOT NULL) as has_kill_pill,
+                    COUNTIF(kill_pill_context IS NOT NULL) as has_kill_pill_context,
+                    COUNTIF(kill_pill_count IS NOT NULL) as has_kill_pill_count,
+                    COUNTIF(unwanted IS NOT NULL) as has_unwanted,
+                    COUNTIF(unwanted_context IS NOT NULL) as has_unwanted_context,
+                    COUNTIF(unwanted_count IS NOT NULL) as has_unwanted_count,
+                    COUNTIF(month IS NOT NULL) as has_month,
+                    COUNTIF(tagged_portco IS NOT NULL) as has_tagged_portco,
+                    COUNTIF(matched_vehicle IS NOT NULL) as has_matched_vehicle,
+                    COUNTIF(
+                        id IS NOT NULL
+                        AND publish_date IS NOT NULL
+                        AND url IS NOT NULL AND url != ''
+                        AND domain IS NOT NULL AND domain != ''
+                        AND country IS NOT NULL
+                        AND content IS NOT NULL AND content != ''
+                        AND matched_spokespeople IS NOT NULL
+                        AND matched_vc_investors IS NOT NULL
+                        AND matched_portcos IS NOT NULL
+                        AND tagged_antler IS NOT NULL
+                        AND language IS NOT NULL
+                        AND managed_by_fund IS NOT NULL
+                        AND kill_pill IS NOT NULL
+                        AND kill_pill_context IS NOT NULL
+                        AND kill_pill_count IS NOT NULL
+                        AND unwanted IS NOT NULL
+                        AND unwanted_context IS NOT NULL
+                        AND unwanted_count IS NOT NULL
+                        AND month IS NOT NULL
+                        AND tagged_portco IS NOT NULL
+                        AND matched_vehicle IS NOT NULL
+                    ) as fully_complete,
+                    COUNTIF(data_ingestion = TRUE) as pending_scrape
+                FROM `media-455519.mediatracker.mediatracker`
+            """
+            result = list(bq_client.client.query(completeness_query).result())
+            
+            if result:
+                stats = result[0]
+                total = stats.total
+                
+                # Summary metrics
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    complete_pct = round(stats.fully_complete / total * 100) if total > 0 else 0
+                    st.metric("Fully Complete", f"{stats.fully_complete:,}", f"{complete_pct}%")
+                with col2:
+                    st.metric("Total Articles", f"{total:,}")
+                with col3:
+                    incomplete = total - stats.fully_complete
+                    st.metric("Missing Data", f"{incomplete:,}")
+                with col4:
+                    st.metric("Pending Scrape", f"{stats.pending_scrape:,}")
+                
+                st.markdown("---")
+                st.write("**Field Completeness (21 Required Fields):**")
+                
+                # Create a dataframe for the completeness table with all 21 fields
+                # Type: BOOL = boolean (TRUE/FALSE), STRING = text, INT = integer, DATE = date
+                fields_data = [
+                    ("1. id", "INT", "-", stats.has_id, total - stats.has_id, round(stats.has_id/total*100) if total > 0 else 0),
+                    ("2. publish_date", "DATE", "-", stats.has_publish_date, total - stats.has_publish_date, round(stats.has_publish_date/total*100) if total > 0 else 0),
+                    ("3. url", "STRING", "-", stats.has_url, total - stats.has_url, round(stats.has_url/total*100) if total > 0 else 0),
+                    ("4. domain", "STRING", "-", stats.has_domain, total - stats.has_domain, round(stats.has_domain/total*100) if total > 0 else 0),
+                    ("5. country", "STRING", "-", stats.has_country, total - stats.has_country, round(stats.has_country/total*100) if total > 0 else 0),
+                    ("6. content", "STRING", "-", stats.has_content, total - stats.has_content, round(stats.has_content/total*100) if total > 0 else 0),
+                    ("7. matched_spokespeople", "STRING", "-", stats.has_matched_spokespeople, total - stats.has_matched_spokespeople, round(stats.has_matched_spokespeople/total*100) if total > 0 else 0),
+                    ("8. matched_vc_investors", "STRING", "-", stats.has_matched_vc_investors, total - stats.has_matched_vc_investors, round(stats.has_matched_vc_investors/total*100) if total > 0 else 0),
+                    ("9. matched_portcos", "STRING", "-", stats.has_matched_portcos, total - stats.has_matched_portcos, round(stats.has_matched_portcos/total*100) if total > 0 else 0),
+                    ("10. tagged_antler", "BOOL", "TRUE / FALSE", stats.has_tagged_antler, total - stats.has_tagged_antler, round(stats.has_tagged_antler/total*100) if total > 0 else 0),
+                    ("11. language", "STRING", "-", stats.has_language, total - stats.has_language, round(stats.has_language/total*100) if total > 0 else 0),
+                    ("12. managed_by_fund", "STRING", "-", stats.has_managed_by_fund, total - stats.has_managed_by_fund, round(stats.has_managed_by_fund/total*100) if total > 0 else 0),
+                    ("13. kill_pill", "BOOL", "TRUE / FALSE", stats.has_kill_pill, total - stats.has_kill_pill, round(stats.has_kill_pill/total*100) if total > 0 else 0),
+                    ("14. kill_pill_context", "STRING", "-", stats.has_kill_pill_context, total - stats.has_kill_pill_context, round(stats.has_kill_pill_context/total*100) if total > 0 else 0),
+                    ("15. kill_pill_count", "INT", "-", stats.has_kill_pill_count, total - stats.has_kill_pill_count, round(stats.has_kill_pill_count/total*100) if total > 0 else 0),
+                    ("16. unwanted", "BOOL", "TRUE / FALSE", stats.has_unwanted, total - stats.has_unwanted, round(stats.has_unwanted/total*100) if total > 0 else 0),
+                    ("17. unwanted_context", "STRING", "-", stats.has_unwanted_context, total - stats.has_unwanted_context, round(stats.has_unwanted_context/total*100) if total > 0 else 0),
+                    ("18. unwanted_count", "INT", "-", stats.has_unwanted_count, total - stats.has_unwanted_count, round(stats.has_unwanted_count/total*100) if total > 0 else 0),
+                    ("19. month", "STRING", "-", stats.has_month, total - stats.has_month, round(stats.has_month/total*100) if total > 0 else 0),
+                    ("20. tagged_portco", "BOOL", "TRUE / FALSE", stats.has_tagged_portco, total - stats.has_tagged_portco, round(stats.has_tagged_portco/total*100) if total > 0 else 0),
+                    ("21. matched_vehicle", "STRING", "-", stats.has_matched_vehicle, total - stats.has_matched_vehicle, round(stats.has_matched_vehicle/total*100) if total > 0 else 0),
+                ]
+                
+                import pandas
+                df_fields = pandas.DataFrame(fields_data, columns=["Field", "Type", "Options", "Filled", "Missing", "%"])
+                st.dataframe(df_fields, use_container_width=True, hide_index=True)
+                
+                # Action buttons
+                st.markdown("---")
+                st.write("**Actions:**")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Run Enrichment", help="Fill country, page_rank, tier, language from domain data"):
+                        with st.spinner("Running enrichment procedure..."):
+                            try:
+                                bq_client.client.query('CALL `media-455519.mediatracker.process_backlog_bulk`()').result()
+                                st.success("Enrichment complete! Refresh to see updated stats.")
+                            except Exception as e:
+                                if 'streaming buffer' in str(e).lower():
+                                    st.warning("Cannot run enrichment - recent data is still processing. Try again in ~90 minutes.")
+                                else:
+                                    st.error(f"Error: {str(e)[:100]}")
+                
+                with col2:
+                    if st.button("Refresh Stats"):
+                        st.rerun()
+                
+        except Exception as e:
+            st.error(f"Error loading completeness data: {str(e)}")
     
     # Process URLs if user clicked extract/process button
     if scrape_clicked:
@@ -773,6 +986,7 @@ def main():
                     
                     if data and data.get('content'):
                         # Auto-save each successful extraction to BigQuery
+                        # Data standards: NULL for no match, FALSE for boolean defaults
                         record_data = {
                             'url': data['url'],
                             'content': data['content'],
@@ -780,21 +994,21 @@ def main():
                             'title': data['title'],
                             'publish_date': data.get('publish_date', datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
                             'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                            'matched_spokespeople': '',
-                            'matched_reporter': '',
+                            'matched_spokespeople': None,
+                            'matched_reporter': None,
                             'backlinks': 0.0,
                             'tagged_antler': False,
                             'language': 'en',
-                            'matched_portcos': '',
-                            'matched_portco_location': '',
-                            'matched_portco_deal_lead': '',
-                            'managed_by_fund': '',
+                            'matched_portcos': None,
+                            'matched_portco_location': None,
+                            'matched_portco_deal_lead': None,
+                            'managed_by_fund': None,
                             'unbranded_win': False
                         }
                         
-                        # Attempt to save to BigQuery
+                        # Attempt to save to BigQuery (skip procedure - will call bulk at end)
                         try:
-                            success = bq_client.insert_media_record(record_data)
+                            success = bq_client.insert_media_record(record_data, skip_procedure=True)
                             if success:
                                 successful_count += 1
                                 st.session_state.batch_results.append({
@@ -862,6 +1076,13 @@ def main():
             
             if successful_count > 0:
                 st.success(f"🎉 **Chunk Complete:** {successful_count}/{total_processed} URLs processed successfully!")
+                # MANDATORY: Run enrichment on ALL rows
+                import time
+                with st.spinner("⏳ Waiting for BigQuery to process (20 sec)..."):
+                    time.sleep(20)
+                with st.spinner("🔄 Running enrichment on ALL rows..."):
+                    bq_client.run_full_enrichment()
+                st.success("✅ Enrichment completed - all fields filled!")
             else:
                 st.error(f"⚠️ **No URLs processed successfully** - check errors above")
             
@@ -913,7 +1134,6 @@ def main():
                     if st.button("➡️ Process More URLs", type="primary"):
                         st.rerun()
                 else:
-                    st.balloons()
                     st.success("🎉 **All URLs processed successfully!**")
                     
                     # Clear the multiple URLs input field
@@ -1021,6 +1241,7 @@ def main():
             with st.spinner(
                     "Checking for duplicates and saving to BigQuery..."):
                 try:
+                    # Data standards: NULL for no match, FALSE for boolean defaults
                     record_data = {
                         'url': url,
                         'content': content,
@@ -1030,18 +1251,18 @@ def main():
                         publish_date.strftime('%Y-%m-%d %H:%M:%S'),
                         'updated_at':
                         datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        'matched_spokespeople': spokesperson or '',
-                        'matched_reporter': reporter or '',
+                        'matched_spokespeople': spokesperson or None,
+                        'matched_reporter': reporter or None,
                         'backlinks': 0.0,
                         'tagged_antler': auto_tagged_antler,
                         'language': 'en',
-                        'matched_portcos': portfolio_company or '',
-                        'matched_portco_location': '',
-                        'matched_portco_deal_lead': '',
-                        'managed_by_fund': 'Antler' if gst_checkbox else '',
+                        'matched_portcos': portfolio_company or None,
+                        'matched_portco_location': None,
+                        'matched_portco_deal_lead': None,
+                        'managed_by_fund': 'Antler' if gst_checkbox else None,
                         'unbranded_win': False,
-                        'country': country or '',
-                        'matched_vehicle': matched_vehicle or ''
+                        'country': country or None,
+                        'matched_vehicle': matched_vehicle or None
                     }
 
                     success = bq_client.insert_media_record(record_data)
@@ -1373,7 +1594,7 @@ def main():
                 
                 # Handle scrape
                 if scrape_btn and len(selected_ids) > 0:
-                    st.info(f"Starting to scrape {len(selected_ids)} selected articles...")
+                    st.info(f"Starting to scrape {len(selected_ids)} selected articles using Firecrawl...")
                     
                     articles_by_id = {row.id: row for row in results}
                     progress_bar = st.progress(0)
@@ -1381,8 +1602,6 @@ def main():
                     
                     success_count = 0
                     fail_count = 0
-                    
-                    from web_scraper import get_website_text_content
                     
                     for idx, article_id in enumerate(selected_ids):
                         article = articles_by_id.get(article_id)
@@ -1394,18 +1613,23 @@ def main():
                         status_text.text(f"Scraping {idx+1}/{len(selected_ids)}: {title}")
                         
                         try:
-                            content = get_website_text_content(url)
+                            result = scrape_article_data_fast(url)
                             
-                            if content and len(content.strip()) > 50:
+                            if result and result.get('content') and len(result['content'].strip()) > 50:
+                                content = result['content']
                                 max_content_length = 1000000
                                 if len(content) > max_content_length:
                                     content = content[:max_content_length] + "... [Content truncated]"
+                                
+                                # Ensure domain exists in media_data
+                                bq_client.ensure_domain_in_media_data(article.domain)
                                 
                                 update_query = """
                                 UPDATE `media-455519.mediatracker.mediatracker`
                                 SET content = @content,
                                     text_scraped = true,
-                                    text_scraped_at = CURRENT_TIMESTAMP()
+                                    text_scraped_at = CURRENT_TIMESTAMP(),
+                                    data_ingestion = true
                                 WHERE id = @id
                                 """
                                 
@@ -1430,8 +1654,19 @@ def main():
                     status_text.empty()
                     progress_bar.empty()
                     
-                    st.success(f"Scraping complete!")
-                    st.write(f"**Results:** {success_count} successful, {fail_count} failed")
+                    # MANDATORY: Run enrichment on ALL rows after scraping
+                    if success_count > 0:
+                        import time
+                        status_text.text("⏳ Waiting for BigQuery to process (20 sec)...")
+                        time.sleep(20)
+                        status_text.text("🔄 Running enrichment on ALL rows...")
+                        try:
+                            bq_client.run_full_enrichment()
+                            st.success(f"✅ Scraping complete! {success_count} successful, {fail_count} failed. All fields filled.")
+                        except Exception as e:
+                            st.warning(f"Scraped {success_count} articles but enrichment failed: {str(e)[:100]}")
+                    else:
+                        st.warning(f"Scraping complete. {fail_count} failed, 0 successful.")
                     
                     if st.button("Refresh page"):
                         st.rerun()
@@ -1441,6 +1676,60 @@ def main():
                 
         except Exception as e:
             st.error(f"Error loading articles: {str(e)}")
+
+    # Section 3: Add Portfolio Company
+    st.subheader("3. Add Portfolio Company")
+    
+    try:
+        portco_client = BigQueryClient()
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            new_name = st.text_input("Company Name *", key="new_portco_name", placeholder="e.g. Airalo")
+        with col2:
+            new_location = st.text_input("Location", key="new_portco_loc", placeholder="e.g. Singapore")
+        with col3:
+            new_deal_lead = st.text_input("Deal Lead", key="new_portco_lead", placeholder="e.g. John Smith")
+        with col4:
+            new_vehicle = st.text_input("Vehicle", key="new_portco_vehicle", placeholder="e.g. Fund III")
+        
+        if st.button("Add Company"):
+            if new_name and new_name.strip():
+                # Get next ID
+                max_id_query = "SELECT COALESCE(MAX(id), 0) as max_id FROM `media-455519.mediatracker.portcos`"
+                max_id_result = list(portco_client.client.query(max_id_query).result())
+                next_id = (max_id_result[0].max_id or 0) + 1
+                
+                # Auto-fill fields
+                sync_key = str(uuid.uuid4())[:8]
+                
+                insert_query = """
+                INSERT INTO `media-455519.mediatracker.portcos` 
+                (id, created_at, portco_name, portco_location, portco_deal_lead, ai, sync_primary_key_334c63, vehicle)
+                VALUES (@id, CURRENT_TIMESTAMP(), @name, @location, @deal_lead, @ai, @sync_key, @vehicle)
+                """
+                
+                job_config = bigquery.QueryJobConfig(
+                    query_parameters=[
+                        bigquery.ScalarQueryParameter("id", "INT64", next_id),
+                        bigquery.ScalarQueryParameter("name", "STRING", new_name.strip()),
+                        bigquery.ScalarQueryParameter("location", "STRING", new_location.strip() if new_location else "Unknown"),
+                        bigquery.ScalarQueryParameter("deal_lead", "STRING", new_deal_lead.strip() if new_deal_lead else "Unknown"),
+                        bigquery.ScalarQueryParameter("ai", "STRING", "false"),
+                        bigquery.ScalarQueryParameter("sync_key", "STRING", sync_key),
+                        bigquery.ScalarQueryParameter("vehicle", "STRING", new_vehicle.strip() if new_vehicle else None)
+                    ]
+                )
+                
+                portco_client.client.query(insert_query, job_config=job_config).result()
+                st.success(f"Added: {new_name.strip()}")
+                st.rerun()
+            else:
+                st.warning("Company name is required.")
+                    
+    except Exception as e:
+        st.error(f"Error: {str(e)}")
 
     st.markdown("---")
     st.caption("Antler Media Tracker | Report issues: marketing@antler.co")

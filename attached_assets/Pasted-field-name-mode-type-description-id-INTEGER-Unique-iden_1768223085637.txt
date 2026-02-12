@@ -1,0 +1,47 @@
+field name	mode	type	description
+id		INTEGER	Unique identifier for the media entry.
+updated_at		TIMESTAMP	The date and time the media entry was last updated.
+publish_date		TIMESTAMP	The date and time the media was published.
+url		STRING	The URL of the media article.
+title		STRING	The title of the media article.
+domain		STRING	The domain name of the website where the media was published.
+country		STRING	The country where the media was published.
+content		STRING	The full text content of the media article.
+matched_spokespeople		STRING	Spokespeople mentioned in the media.
+spokespeople_in_headline		BOOLEAN	Indicates whether spokespeople are mentioned in the headline.
+matched_vc_investors		STRING	Venture capital investors mentioned in the media.
+matched_dealroom_rank		STRING	Dealroom rank of the mentioned company.
+matched_reporter		STRING	Reporters mentioned in the media.
+matched_portcos		STRING	Portfolio companies mentioned in the media.
+tagged_antler		BOOLEAN	Indicates whether the media is tagged as related to Antler.
+language		STRING	The language of the media article.
+matched_portco_location		STRING	Location of portfolio companies mentioned in the media.
+matched_portco_deal_lead		STRING	Deal leads of portfolio companies mentioned in the media.
+matched_portco_ai		STRING	AI-identified portfolio companies mentioned in the media.
+managed_by_fund		STRING	Funds that manage the mentioned portfolio company.
+backlinks		FLOAT	The number of backlinks to the media article.
+page_rank		INTEGER	The page rank of the website where the media was published.
+tier		STRING	The tier of the media source.
+kill_pill		BOOLEAN	Indicates whether the media is considered a kill pill.
+kill_pill_context		STRING	Contextual information related to the kill pill status.
+kill_pill_count		INTEGER	The number of times a kill pill context is identified.
+unwanted		BOOLEAN	Indicates whether the media is considered unwanted.
+unwanted_context		STRING	Contextual information related to unwanted status.
+unwanted_count		INTEGER	The number of times an unwanted context is identified.
+antler_in_headline		BOOLEAN	Indicates whether Antler is mentioned in the headline.
+cleaned_url		STRING	The cleaned and standardized URL of the media article.
+social_shares_count		INTEGER	The number of social shares of the media article.
+syften_progress		STRING	The progress of the media processing in Syften.
+syften_batch		STRING	The Syften batch the media was processed in.
+tagged_portco		BOOLEAN	Indicates whether the media is tagged as related to a portfolio company.
+social_followers		INTEGER	The number of social media followers of the media source.
+month		DATE	The month the media was published.
+unbranded_win		BOOLEAN	Indicates whether the media is an unbranded win.
+summary		STRING	A brief summary of the media article.
+li_summary		STRING	Summary of the article from LinkedIn.
+wa_summary		STRING	Summary of the article from Web Archive.
+text_scraped		BOOLEAN	
+text_scraped_at		TIMESTAMP	
+text_scrape_error		STRING	
+data_ingestion	NULLABLE	BOOLEAN	True if row was added via Data ingestion feature
+matched_vehicle	NULLABLE	STRING	

@@ -1,0 +1,361 @@
+BEGIN
+  -- session
+  DECLARE run_id STRING DEFAULT GENERATE_UUID();
+  DECLARE proc_name STRING DEFAULT 'process_new_url';
+  DECLARE start_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP();
+
+  -- working state
+  DECLARE target_id INT64;
+  DECLARE target_url STRING;
+  DECLARE content_len INT64;
+  DECLARE cleaned STRING;
+  DECLARE norm_domain STRING;
+
+  -- logger
+  CREATE TEMP FUNCTION log(step STRING, sev STRING, msg STRING, ctx JSON)
+  AS (STRUCT(
+    run_id AS run_id,
+    COALESCE(target_url, '') AS url,
+    proc_name AS proc,
+    step AS step,
+    sev AS severity,
+    msg AS message,
+    ctx AS context,
+    TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), start_ts, MILLISECOND) AS ms_elapsed,
+    CURRENT_TIMESTAMP() AS ts
+  ));
+
+  /* START */
+  INSERT INTO `media-455519.mediatracker.processing_logs`
+  (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+  SELECT * FROM UNNEST([log('START','INFO','begin', TO_JSON(STRUCT()))]);
+
+  /* STEP 1: pick newest row */
+  BEGIN
+    SET target_url = (
+      SELECT url
+      FROM `media-455519.mediatracker.mediatracker`
+      WHERE url IS NOT NULL AND TRIM(url) <> ''
+      ORDER BY updated_at DESC
+      LIMIT 1
+    );
+    INSERT INTO `media-455519.mediatracker.processing_logs`
+    (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+    SELECT * FROM UNNEST([log('SELECT_NEWEST','INFO',IFNULL(target_url,'<null>'), TO_JSON(STRUCT()))]);
+    IF target_url IS NULL THEN
+      INSERT INTO `media-455519.mediatracker.processing_logs`
+      (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+      SELECT * FROM UNNEST([log('EXIT','WARN','no rows in mediatracker', TO_JSON(STRUCT()))]);
+      RETURN;
+    END IF;
+  EXCEPTION WHEN ERROR THEN
+    INSERT INTO `media-455519.mediatracker.processing_logs`
+    (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+    SELECT * FROM UNNEST([log('SELECT_NEWEST','ERROR', ERROR_MESSAGE(), TO_JSON(STRUCT()))]);
+    RETURN;
+  END;
+
+  /* STEP 2: assign id (if missing) + resolve id */
+  BEGIN
+    UPDATE `media-455519.mediatracker.mediatracker`
+    SET id = (SELECT IFNULL(MAX(id),0) + 1 FROM `media-455519.mediatracker.mediatracker`)
+    WHERE id IS NULL AND LOWER(TRIM(url)) = LOWER(TRIM(target_url));
+    SET target_id = (
+      SELECT id
+      FROM `media-455519.mediatracker.mediatracker`
+      WHERE LOWER(TRIM(url)) = LOWER(TRIM(target_url))
+      ORDER BY updated_at DESC
+      LIMIT 1
+    );
+    INSERT INTO `media-455519.mediatracker.processing_logs`
+    (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+    SELECT * FROM UNNEST([log('ASSIGN_ID','INFO','resolved id', TO_JSON(STRUCT(target_id AS id)))]);
+    IF target_id IS NULL THEN
+      INSERT INTO `media-455519.mediatracker.processing_logs`
+      (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+      SELECT * FROM UNNEST([log('EXIT','WARN','could not resolve id after assign', TO_JSON(STRUCT()))]);
+      RETURN;
+    END IF;
+  EXCEPTION WHEN ERROR THEN
+    INSERT INTO `media-455519.mediatracker.processing_logs`
+    (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+    SELECT * FROM UNNEST([log('ASSIGN_ID','ERROR', ERROR_MESSAGE(), TO_JSON(STRUCT()))]);
+    RETURN;
+  END;
+
+  /* STEP 3: normalize core fields */
+  BEGIN
+    SET cleaned = REGEXP_REPLACE(
+      REGEXP_REPLACE(REGEXP_REPLACE(LOWER(TRIM(target_url)), r'^https?://(www\.)?', ''), r'\?.*$', ''),
+      r'/$', ''
+    );
+    SET norm_domain = (
+      SELECT COALESCE(
+               LOWER(NULLIF(TRIM(domain),'')),
+               REGEXP_EXTRACT(LOWER(TRIM(target_url)), r'^https?://(?:www\.)?([^/]+)')
+             )
+      FROM `media-455519.mediatracker.mediatracker`
+      WHERE id = target_id
+    );
+    UPDATE `media-455519.mediatracker.mediatracker`
+    SET
+      cleaned_url  = COALESCE(cleaned_url, cleaned),
+      domain       = COALESCE(domain, norm_domain),
+      publish_date = COALESCE(publish_date, DATE(CURRENT_TIMESTAMP())),
+      month        = COALESCE(month, DATE_TRUNC(DATE(COALESCE(publish_date, DATE(CURRENT_TIMESTAMP()))), MONTH)),
+      language     = COALESCE(language,
+                        CASE WHEN REGEXP_CONTAINS(IFNULL(content,''), r'[\p{Han}]') THEN 'zh' ELSE 'en' END),
+      antler_in_headline = COALESCE(antler_in_headline,
+                          REGEXP_CONTAINS(LOWER(IFNULL(title,'')), r'\bantler\b')),
+      tagged_antler = COALESCE(tagged_antler,
+                        REGEXP_CONTAINS(LOWER(IFNULL(content,'')), r'\bantler\b') OR
+                        REGEXP_CONTAINS(LOWER(IFNULL(title,'')), r'\bantler\b') OR
+                        LOWER(IFNULL(managed_by_fund,'')) = 'antler'),
+      updated_at = CURRENT_TIMESTAMP()
+    WHERE id = target_id;
+
+    INSERT INTO `media-455519.mediatracker.processing_logs`
+    (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+    SELECT * FROM UNNEST([log('NORMALIZE','INFO','normalized',
+      TO_JSON(STRUCT(
+        (SELECT cleaned_url FROM `media-455519.mediatracker.mediatracker` WHERE id=target_id) AS cleaned_url,
+        (SELECT domain      FROM `media-455519.mediatracker.mediatracker` WHERE id=target_id) AS domain,
+        (SELECT language    FROM `media-455519.mediatracker.mediatracker` WHERE id=target_id) AS language
+      )))]);
+
+  EXCEPTION WHEN ERROR THEN
+    INSERT INTO `media-455519.mediatracker.processing_logs`
+    (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+    SELECT * FROM UNNEST([log('NORMALIZE','ERROR', ERROR_MESSAGE(), TO_JSON(STRUCT()))]);
+    -- continue
+  END;
+
+  /* STEP 4: content guard */
+  BEGIN
+    SET content_len = (
+      SELECT LENGTH(TRIM(IFNULL(content,'')))
+      FROM `media-455519.mediatracker.mediatracker`
+      WHERE id = target_id
+    );
+    INSERT INTO `media-455519.mediatracker.processing_logs`
+    (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+    SELECT * FROM UNNEST([log('GUARD_CONTENT','INFO','content length', TO_JSON(STRUCT(content_len AS len)))]);
+    IF content_len < 20 THEN
+      INSERT INTO `media-455519.mediatracker.processing_logs`
+      (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+      SELECT * FROM UNNEST([log('SKIP','WARN','content too short (<20)', TO_JSON(STRUCT(target_id AS id)))]);
+      RETURN;
+    END IF;
+  EXCEPTION WHEN ERROR THEN
+    INSERT INTO `media-455519.mediatracker.processing_logs`
+    (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+    SELECT * FROM UNNEST([log('GUARD_CONTENT','ERROR', ERROR_MESSAGE(), TO_JSON(STRUCT()))]);
+    RETURN;
+  END;
+
+  /* STEP 5: spokespeople */
+  BEGIN
+    MERGE `media-455519.mediatracker.mediatracker` AS m
+    USING (
+      SELECT m.id, STRING_AGG(DISTINCT sp.spokesperson_name, ', ') AS spokes
+      FROM `media-455519.mediatracker.mediatracker` m
+      JOIN `media-455519.mediatracker.spokespeople` sp
+        ON REGEXP_CONTAINS(' ' || LOWER(IFNULL(m.content,'')) || ' ',
+           r'[^a-z0-9]' || LOWER(sp.spokesperson_name) || r'[^a-z0-9]')
+      WHERE m.id = target_id
+      GROUP BY m.id
+    ) s
+    ON m.id = s.id
+    WHEN MATCHED AND s.spokes IS NOT NULL AND s.spokes <> '' THEN
+      UPDATE SET matched_spokespeople = s.spokes;
+
+    INSERT INTO `media-455519.mediatracker.processing_logs`
+    (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+    SELECT * FROM UNNEST([log('ENRICH_SPOKES','INFO','done',
+      TO_JSON(STRUCT((SELECT matched_spokespeople FROM `media-455519.mediatracker.mediatracker` WHERE id=target_id) AS matched_spokespeople)))]);
+
+  EXCEPTION WHEN ERROR THEN
+    INSERT INTO `media-455519.mediatracker.processing_logs`
+    (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+    SELECT * FROM UNNEST([log('ENRICH_SPOKES','ERROR', ERROR_MESSAGE(), TO_JSON(STRUCT()))]);
+  END;
+
+  /* STEP 6: headline boolean */
+  BEGIN
+    UPDATE `media-455519.mediatracker.mediatracker`
+    SET spokespeople_in_headline = EXISTS (
+      SELECT 1
+      FROM `media-455519.mediatracker.spokespeople` sp
+      WHERE REGEXP_CONTAINS(' ' || LOWER(IFNULL(title,'')) || ' ',
+         r'[^a-z0-9]' || LOWER(sp.spokesperson_name) || r'[^a-z0-9]')
+    )
+    WHERE id = target_id;
+  EXCEPTION WHEN ERROR THEN
+    INSERT INTO `media-455519.mediatracker.processing_logs`
+    (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+    SELECT * FROM UNNEST([log('HEADLINE_FLAG','ERROR', ERROR_MESSAGE(), TO_JSON(STRUCT()))]);
+  END;
+
+  /* STEP 7: VC investors */
+  BEGIN
+    MERGE `media-455519.mediatracker.mediatracker` AS m
+    USING (
+      SELECT m.id,
+             STRING_AGG(DISTINCT vc.investor, ', ') AS investors,
+             STRING_AGG(DISTINCT CAST(vc.rank AS STRING), ', ') AS ranks
+      FROM `media-455519.mediatracker.mediatracker` m
+      JOIN `media-455519.mediatracker.vc_investor_rankings` vc
+        ON REGEXP_CONTAINS(' ' || LOWER(IFNULL(m.content,'')) || ' ',
+           r'[^a-z0-9]' || LOWER(vc.investor) || r'[^a-z0-9]')
+      WHERE m.id = target_id
+      GROUP BY m.id
+    ) v
+    ON m.id = v.id
+    WHEN MATCHED AND v.investors IS NOT NULL AND v.investors <> '' THEN
+      UPDATE SET matched_vc_investors = v.investors,
+                 matched_dealroom_rank = v.ranks;
+
+    INSERT INTO `media-455519.mediatracker.processing_logs`
+    (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+    SELECT * FROM UNNEST([log('ENRICH_INVESTORS','INFO','done',
+      TO_JSON(STRUCT(
+        (SELECT matched_vc_investors FROM `media-455519.mediatracker.mediatracker` WHERE id=target_id) AS matched_vc_investors,
+        (SELECT matched_dealroom_rank FROM `media-455519.mediatracker.mediatracker` WHERE id=target_id) AS matched_dealroom_rank
+      )))]);
+
+  EXCEPTION WHEN ERROR THEN
+    INSERT INTO `media-455519.mediatracker.processing_logs`
+    (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+    SELECT * FROM UNNEST([log('ENRICH_INVESTORS','ERROR', ERROR_MESSAGE(), TO_JSON(STRUCT()))]);
+  END;
+
+  /* STEP 8: reporters */
+  BEGIN
+    MERGE `media-455519.mediatracker.mediatracker` AS m
+    USING (
+      SELECT m.id, STRING_AGG(DISTINCT r.tagged_reporter, ', ') AS reporters
+      FROM `media-455519.mediatracker.mediatracker` m
+      JOIN `media-455519.mediatracker.reporters` r
+        ON REGEXP_CONTAINS(' ' || LOWER(IFNULL(m.content,'')) || ' ',
+           r'[^a-z0-9]' || LOWER(r.tagged_reporter) || r'[^a-z0-9]')
+      WHERE m.id = target_id
+      GROUP BY m.id
+    ) rr
+    ON m.id = rr.id
+    WHEN MATCHED AND rr.reporters IS NOT NULL AND rr.reporters <> '' THEN
+      UPDATE SET matched_reporter = rr.reporters;
+
+    INSERT INTO `media-455519.mediatracker.processing_logs`
+    (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+    SELECT * FROM UNNEST([log('ENRICH_REPORTERS','INFO','done',
+      TO_JSON(STRUCT((SELECT matched_reporter FROM `media-455519.mediatracker.mediatracker` WHERE id=target_id) AS matched_reporter)))]);
+
+  EXCEPTION WHEN ERROR THEN
+    INSERT INTO `media-455519.mediatracker.processing_logs`
+    (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+    SELECT * FROM UNNEST([log('ENRICH_REPORTERS','ERROR', ERROR_MESSAGE(), TO_JSON(STRUCT()))]);
+  END;
+
+  /* STEP 9: portcos + tagged_portco */
+  BEGIN
+    MERGE `media-455519.mediatracker.mediatracker` AS m
+    USING (
+      SELECT m.id,
+             STRING_AGG(DISTINCT p.portco_name, ', ') AS portcos,
+             STRING_AGG(DISTINCT p.portco_location, ', ') AS locations,
+             STRING_AGG(DISTINCT p.portco_deal_lead, ', ') AS leads,
+             STRING_AGG(DISTINCT p.ai, ', ') AS ai
+      FROM `media-455519.mediatracker.mediatracker` m
+      JOIN `media-455519.mediatracker.portcos` p
+        ON REGEXP_CONTAINS(' ' || LOWER(IFNULL(m.content,'')) || ' ',
+           r'[^a-z0-9]' || LOWER(p.portco_name) || r'[^a-z0-9]')
+      WHERE m.id = target_id
+      GROUP BY m.id
+    ) pc
+    ON m.id = pc.id
+    WHEN MATCHED AND pc.portcos IS NOT NULL AND pc.portcos <> '' THEN
+      UPDATE SET
+        matched_portcos = pc.portcos,
+        matched_portco_location = pc.locations,
+        matched_portco_deal_lead = pc.leads,
+        matched_portco_ai = pc.ai;
+
+    UPDATE `media-455519.mediatracker.mediatracker`
+    SET tagged_portco = (matched_portcos IS NOT NULL AND matched_portcos <> '')
+    WHERE id = target_id;
+
+    INSERT INTO `media-455519.mediatracker.processing_logs`
+    (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+    SELECT * FROM UNNEST([log('ENRICH_PORTCOS','INFO','done',
+      TO_JSON(STRUCT((SELECT matched_portcos FROM `media-455519.mediatracker.mediatracker` WHERE id=target_id) AS matched_portcos)))]);
+
+  EXCEPTION WHEN ERROR THEN
+    INSERT INTO `media-455519.mediatracker.processing_logs`
+    (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+    SELECT * FROM UNNEST([log('ENRICH_PORTCOS','ERROR', ERROR_MESSAGE(), TO_JSON(STRUCT()))]);
+  END;
+
+  /* STEP 10: keyword flags */
+  BEGIN
+    UPDATE `media-455519.mediatracker.mediatracker`
+    SET
+      kill_pill = REGEXP_CONTAINS(LOWER(IFNULL(content,'')), r'\b(incubator|孵化器|孵化场|孵化中心)\b'),
+      kill_pill_count = ARRAY_LENGTH(REGEXP_EXTRACT_ALL(LOWER(IFNULL(content,'')), r'\b(incubator|孵化器|孵化场|孵化中心)\b')),
+      kill_pill_context = (
+        SELECT STRING_AGG(sentence, ' | ')
+        FROM UNNEST(SPLIT(IFNULL(content,''), '.')) AS sentence
+        WHERE REGEXP_CONTAINS(LOWER(sentence), r'\b(incubator|孵化器|孵化场|孵化中心)\b')
+      ),
+      unwanted = REGEXP_CONTAINS(LOWER(IFNULL(content,'')), r'\b(accelerator|startup factory|孵化器工厂)\b'),
+      unwanted_count = ARRAY_LENGTH(REGEXP_EXTRACT_ALL(LOWER(IFNULL(content,'')), r'\b(accelerator|startup factory|孵化器工厂)\b')),
+      unwanted_context = (
+        SELECT STRING_AGG(sentence, ' | ')
+        FROM UNNEST(SPLIT(IFNULL(content,''), '.')) AS sentence
+        WHERE REGEXP_CONTAINS(LOWER(sentence), r'\b(accelerator|startup factory|孵化器工厂)\b')
+      )
+    WHERE id = target_id;
+
+    INSERT INTO `media-455519.mediatracker.processing_logs`
+    (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+    SELECT * FROM UNNEST([log('KEYWORDS','INFO','done', TO_JSON(STRUCT()))]);
+
+  EXCEPTION WHEN ERROR THEN
+    INSERT INTO `media-455519.mediatracker.processing_logs`
+    (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+    SELECT * FROM UNNEST([log('KEYWORDS','ERROR', ERROR_MESSAGE(), TO_JSON(STRUCT()))]);
+  END;
+
+  /* STEP 11: media metadata */
+  BEGIN
+    MERGE `media-455519.mediatracker.mediatracker` AS m
+    USING (
+      SELECT m.id, d.country, d.page_rank, d.tier
+      FROM `media-455519.mediatracker.mediatracker` m
+      JOIN `media-455519.mediatracker.media_data` d
+        ON LOWER(REPLACE(IFNULL(m.domain,''),'www.','')) = LOWER(REPLACE(d.domain,'www.',''))
+      WHERE m.id = target_id
+    ) md
+    ON m.id = md.id
+    WHEN MATCHED THEN
+      UPDATE SET
+        m.country   = IFNULL(m.country, md.country),
+        m.page_rank = IFNULL(m.page_rank, md.page_rank),
+        m.tier      = IFNULL(m.tier, md.tier);
+
+    INSERT INTO `media-455519.mediatracker.processing_logs`
+    (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+    SELECT * FROM UNNEST([log('MEDIA_META','INFO','done',
+      TO_JSON(STRUCT((SELECT country FROM `media-455519.mediatracker.mediatracker` WHERE id=target_id) AS country)))]);
+
+  EXCEPTION WHEN ERROR THEN
+    INSERT INTO `media-455519.mediatracker.processing_logs`
+    (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+    SELECT * FROM UNNEST([log('MEDIA_META','ERROR', ERROR_MESSAGE(), TO_JSON(STRUCT()))]);
+  END;
+
+  /* DONE */
+  INSERT INTO `media-455519.mediatracker.processing_logs`
+  (run_id,url,proc,step,severity,message,context,ms_elapsed,ts)
+  SELECT * FROM UNNEST([log('DONE','INFO','completed', TO_JSON(STRUCT(target_id AS id)))]);
+
+END

@@ -1,17 +1,295 @@
 import trafilatura
 from urllib.parse import urlparse
-import streamlit as st
 import requests
 from datetime import datetime
 import dateutil.parser
+import os
+import re
+
+try:
+    import streamlit as st
+    HAS_STREAMLIT = True
+except ImportError:
+    HAS_STREAMLIT = False
+    st = None
+
+try:
+    from firecrawl import FirecrawlApp
+    HAS_FIRECRAWL = True
+except ImportError:
+    HAS_FIRECRAWL = False
+    FirecrawlApp = None
+
+# Firecrawl API for paywalled content
+FIRECRAWL_API_KEY = os.environ.get('FIRECRAWL_API_KEY', '')
+
+# Maximum content length to avoid BigQuery/Streamlit display issues
+MAX_CONTENT_LENGTH = 50000
+
+def truncate_content(content: str) -> str:
+    """Truncate content to MAX_CONTENT_LENGTH characters"""
+    if content and len(content) > MAX_CONTENT_LENGTH:
+        return content[:MAX_CONTENT_LENGTH]
+    return content
+
+# Domains known to have paywalls - use Firecrawl for these
+PAYWALL_DOMAINS = [
+    'wsj.com',
+    'ft.com',
+    'nytimes.com',
+    'economist.com',
+    'bloomberg.com',
+    'barrons.com',
+    'telegraph.co.uk',
+    'thetimes.co.uk',
+    'washingtonpost.com',
+    'hbr.org',
+    'fortune.com',
+    'techinasia.com',
+    'sifted.eu',
+]
+
+def _warn(msg):
+    if HAS_STREAMLIT and st:
+        try:
+            st.warning(msg)
+        except:
+            print(f"Warning: {msg}")
+    else:
+        print(f"Warning: {msg}")
+
+def is_paywall_domain(url: str) -> bool:
+    """Check if the URL is from a known paywalled domain"""
+    domain = extract_domain_from_url(url)
+    return any(paywall in domain for paywall in PAYWALL_DOMAINS)
+
+def clean_markdown_content(content: str) -> str:
+    """
+    Clean up scraped markdown content by removing navigation, ads, 
+    subscription prompts, job listings, and other website chrome.
+    """
+    if not content:
+        return ""
+    
+    lines = content.split('\n')
+    cleaned_lines = []
+    skip_section = False
+    article_started = False
+    
+    # Patterns to skip (navigation, ads, etc.)
+    skip_patterns = [
+        '- [Premium]',
+        '- [Visuals]',
+        '- [News]',
+        '- [Paid Partnership]',
+        '- [Press Releases]',
+        '- More',
+        '[Free newsletter]',
+        '[Subscribe]',
+        'Tired of ads?',
+        'signing up',
+        'Premium Content',
+        'It takes our newsroom',
+        "You can't find them",
+        'anywhere else',
+        'This is premium content',
+        'Subscribe to read',
+        'We know this is not ideal',
+        'Sign up in 20 seconds',
+        'Cancel anytime',
+        'For learners',
+        'For professionals',
+        'Best value',
+        'Billed annually',
+        'Get instant access',
+        'premium content',
+        'Unlimited news content',
+        'Unlimited company database',
+        'Ad-free reading',
+        'Just US$',
+        '[Compare]',
+        '[Subscribe now',
+        'Already a subscriber',
+        '[Log in Here]',
+        'Our subscriber community',
+        '### [🏆 Premium',
+        '### [💼 Latest Jobs',
+        '📅 Upcoming Events',
+        'More articles ↓',
+        'NextPrev',
+        'Featured',
+        'TIA Writer',
+        '· 2d ago ·',
+        '· 1d ago ·',
+        '· 3d ago ·',
+        'min read',
+    ]
+    
+    # Patterns that indicate end of article content
+    end_patterns = [
+        '## Stay ahead in Asia',
+        'This is premium content. Subscribe',
+        '### [🏆 Premium Content]',
+        '### [💼 Latest Jobs]',
+    ]
+    
+    for line in lines:
+        stripped = line.strip()
+        
+        # Check if we've hit end of article
+        if any(pattern in line for pattern in end_patterns):
+            break
+        
+        # Skip empty lines at the start
+        if not article_started and not stripped:
+            continue
+        
+        # Skip navigation and chrome
+        if any(pattern in line for pattern in skip_patterns):
+            continue
+        
+        # Skip image-only lines (markdown images without text)
+        if stripped.startswith('![') and stripped.endswith(')') and len(stripped) < 200:
+            # Allow images with captions (longer lines)
+            if '/' not in stripped[3:50]:  # Skip if it looks like a nav image
+                continue
+        
+        # Skip lines that are just links
+        if stripped.startswith('[') and stripped.endswith(')') and '](' in stripped:
+            link_text = stripped.split('](')[0][1:]
+            if len(link_text) < 50:  # Short link text = likely navigation
+                continue
+        
+        # Skip lines with multiple navigation-style links
+        if stripped.count('](http') > 2:
+            continue
+        
+        # Skip job listings
+        if '**Mandarin Teacher**' in line or '**Online Sales' in line or 'IDR ' in line:
+            continue
+        
+        # Detect article start (headline)
+        if stripped.startswith('# ') and not article_started:
+            article_started = True
+        
+        # Add valid content
+        if stripped or article_started:
+            cleaned_lines.append(line)
+            if stripped:
+                article_started = True
+    
+    # Join and clean up extra whitespace
+    result = '\n'.join(cleaned_lines)
+    
+    # Remove multiple consecutive blank lines
+    while '\n\n\n' in result:
+        result = result.replace('\n\n\n', '\n\n')
+    
+    # Remove markdown link syntax, keep just the text
+    # [text](url) -> text
+    result = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', result)
+    
+    # Remove image references
+    result = re.sub(r'!\[[^\]]*\]\([^)]+\)', '', result)
+    
+    # Clean up any remaining Base64 image references
+    result = re.sub(r'<Base64-Image-Removed>', '', result)
+    
+    # Remove duplicate title (non-heading version before the # heading)
+    lines = result.split('\n')
+    if len(lines) > 2:
+        # Find the main headline
+        for i, line in enumerate(lines):
+            if line.strip().startswith('# '):
+                headline = line.strip()[2:].strip()
+                # Check if previous non-empty lines match the headline
+                new_lines = []
+                for j, l in enumerate(lines):
+                    if j < i and l.strip() == headline:
+                        continue  # Skip duplicate title
+                    new_lines.append(l)
+                result = '\n'.join(new_lines)
+                break
+    
+    # Remove multiple consecutive blank lines again
+    while '\n\n\n' in result:
+        result = result.replace('\n\n\n', '\n\n')
+    
+    return result.strip()
+
+def scrape_with_firecrawl(url: str) -> dict:
+    """
+    Use Firecrawl API to scrape paywalled content.
+    Returns dict with 'content', 'title', 'publish_date' or None on failure.
+    """
+    if not FIRECRAWL_API_KEY:
+        _warn("Firecrawl API key not configured")
+        return None
+    
+    if not HAS_FIRECRAWL:
+        _warn("Firecrawl SDK not installed")
+        return None
+    
+    try:
+        app = FirecrawlApp(api_key=FIRECRAWL_API_KEY)
+        
+        result = app.scrape(url, formats=['markdown'])
+        
+        if result:
+            raw_content = result.markdown if hasattr(result, 'markdown') else ''
+            metadata = result.metadata if hasattr(result, 'metadata') else None
+            
+            # Clean up the content
+            content = clean_markdown_content(raw_content)
+            
+            title = ''
+            publish_date = datetime.now().strftime('%Y-%m-%d')
+            
+            if metadata:
+                title = metadata.title or getattr(metadata, 'og_title', '') or ''
+                pub_time = getattr(metadata, 'published_time', None) or getattr(metadata, 'publishedTime', None) or getattr(metadata, 'og_published_time', None) or getattr(metadata, 'article:published_time', None)
+                if pub_time:
+                    try:
+                        parsed_date = dateutil.parser.parse(pub_time)
+                        publish_date = parsed_date.strftime('%Y-%m-%d')
+                    except:
+                        pass
+                
+                if publish_date == datetime.now().strftime('%Y-%m-%d'):
+                    mod_time = getattr(metadata, 'modified_time', None) or getattr(metadata, 'modifiedTime', None)
+                    if mod_time:
+                        try:
+                            parsed_date = dateutil.parser.parse(mod_time)
+                            publish_date = parsed_date.strftime('%Y-%m-%d')
+                        except:
+                            pass
+            
+            if content:
+                return {
+                    'content': truncate_content(content),
+                    'title': title,
+                    'publish_date': publish_date
+                }
+        
+        return None
+        
+    except Exception as e:
+        _warn(f"Firecrawl error: {str(e)}")
+        return None
 
 def get_website_text_content(url: str) -> str:
     """
     This function takes a url and returns the main text content of the website.
-    The text content is extracted using trafilatura and easier to understand.
+    Uses Firecrawl for paywalled sites, trafilatura for others.
     """
     try:
-        # Send a request with custom timeout using requests directly
+        # Check if this is a paywalled domain - use Firecrawl
+        if is_paywall_domain(url) and FIRECRAWL_API_KEY:
+            result = scrape_with_firecrawl(url)
+            if result and result.get('content'):
+                return result['content']
+        
+        # Standard scraping with trafilatura
         session = requests.Session()
         session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -21,9 +299,21 @@ def get_website_text_content(url: str) -> str:
         response.raise_for_status()
         
         text = trafilatura.extract(response.text)
+        
+        # If content is too short and we have Firecrawl, try it as fallback
+        if (not text or len(text) < 100) and FIRECRAWL_API_KEY:
+            result = scrape_with_firecrawl(url)
+            if result and result.get('content') and len(result['content']) > len(text or ''):
+                return result['content']
+        
         return text if text else ""
     except Exception as e:
-        st.warning(f"Could not scrape content from URL: {str(e)}")
+        # If standard scraping fails and we have Firecrawl, try it
+        if FIRECRAWL_API_KEY:
+            result = scrape_with_firecrawl(url)
+            if result and result.get('content'):
+                return result['content']
+        _warn(f"Could not scrape content from URL: {str(e)}")
         return ""
 
 def get_article_title(url: str) -> str:
@@ -289,13 +579,35 @@ def scrape_light(url: str, brand: str = ""):
 
 def scrape_article_data_fast(url: str):
     """
-    Fast scraping - downloads page once and extracts content, title, and publish date
+    Fast scraping - downloads page once and extracts content, title, and publish date.
+    Uses Firecrawl for paywalled sites.
     """
     try:
         if not url:
             return None
         
-        # Single optimized request with timeout
+        domain = extract_domain_from_url(url)
+        
+        # For paywalled sites, use Firecrawl directly
+        if is_paywall_domain(url) and FIRECRAWL_API_KEY:
+            result = scrape_with_firecrawl(url)
+            if result and result.get('content'):
+                publish_date = result.get('publish_date', datetime.now().strftime('%Y-%m-%d'))
+                if publish_date == datetime.now().strftime('%Y-%m-%d'):
+                    try:
+                        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+                        publish_date = extract_publish_date(response.text, url)
+                    except:
+                        pass
+                return {
+                    'url': url,
+                    'domain': domain,
+                    'content': result['content'],
+                    'title': result.get('title', ''),
+                    'publish_date': publish_date
+                }
+        
+        # Standard scraping with trafilatura
         session = requests.Session()
         session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -310,6 +622,22 @@ def scrape_article_data_fast(url: str):
         
         # Extract content
         content = trafilatura.extract(response.text)
+        
+        # If content is too short and we have Firecrawl, try it as fallback
+        if (not content or len(content) < 100) and FIRECRAWL_API_KEY:
+            result = scrape_with_firecrawl(url)
+            if result and result.get('content') and len(result['content']) > len(content or ''):
+                fc_date = result.get('publish_date', datetime.now().strftime('%Y-%m-%d'))
+                if fc_date == datetime.now().strftime('%Y-%m-%d'):
+                    fc_date = extract_publish_date(response.text, url)
+                return {
+                    'url': url,
+                    'domain': domain,
+                    'content': truncate_content(result['content']),
+                    'title': result.get('title', title),
+                    'publish_date': fc_date
+                }
+        
         if not content:
             return None
         
@@ -321,18 +649,34 @@ def scrape_article_data_fast(url: str):
         # Extract publish date
         publish_date = extract_publish_date(response.text, url)
         
-        domain = extract_domain_from_url(url)
-        
         return {
             'url': url,
             'domain': domain,
-            'content': content,
+            'content': truncate_content(content),
             'title': title,
             'publish_date': publish_date
         }
     
     except Exception as e:
-        st.warning(f"Could not scrape content from URL: {str(e)}")
+        # If standard scraping fails and we have Firecrawl, try it
+        if FIRECRAWL_API_KEY:
+            result = scrape_with_firecrawl(url)
+            if result and result.get('content'):
+                fc_date = result.get('publish_date', datetime.now().strftime('%Y-%m-%d'))
+                if fc_date == datetime.now().strftime('%Y-%m-%d'):
+                    try:
+                        resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=5)
+                        fc_date = extract_publish_date(resp.text, url)
+                    except:
+                        pass
+                return {
+                    'url': url,
+                    'domain': extract_domain_from_url(url),
+                    'content': truncate_content(result['content']),
+                    'title': result.get('title', ''),
+                    'publish_date': fc_date
+                }
+        _warn(f"Could not scrape content from URL: {str(e)}")
         return None
 
 def scrape_article_data(url: str):
@@ -351,6 +695,6 @@ def scrape_article_data(url: str):
     return {
         'url': url,
         'domain': domain,
-        'content': content,
+        'content': truncate_content(content),
         'title': content[:100] + "..." if len(content) > 100 else content  # Extract title from content
     }

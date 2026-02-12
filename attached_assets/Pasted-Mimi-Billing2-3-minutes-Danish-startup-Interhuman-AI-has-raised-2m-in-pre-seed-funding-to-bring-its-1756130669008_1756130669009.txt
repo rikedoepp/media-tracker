@@ -1,0 +1,16 @@
+Mimi Billing2-3 minutes
+Danish startup Interhuman AI has raised €2m in pre-seed funding to bring its social intelligence layer for AI systems to market. Nordic deeptech VC PSV Tech led the round, which also included EIFO (Export and Investment Fund of Denmark), Antler, the Yope Foundation and angels from Ada Ventures.
+
+By integrating psychology and behavioural science with computer vision and audio analysis, Interhuman AI has developed an API and SDK (software development kit) that can be merged into tech stacks to analyse and interpret social signals such as tone of voice, facial expressions and body language in real time.
+
+The company, founded in 2023, is running two paid pilots, one with a client in digital health and another focused on sales training, and is also planning to enter customer services.
+
+In a sales onboarding context it provides feedback not just on what sales reps say, but also how they say it. In a digital health context, it can help improve communication between patients and healthcare providers.
+
+CEO and cofounder Paula Petcu — who brings experience from being the CTO of digital therapeutic startup Brain+ and from the pharmaceutical company Lundbeck — believes that by adding social intelligence to a system such as a chatbot, it can address emotional and human needs often overlooked in AI solutions.
+
+According to the company, 50% of the global AI market involves human-AI interaction, and 40% of those interactions would benefit from the AI understanding non-verbal communication cues.
+
+“If you're only focusing on optimisation, workflows and these kinds of metrics, there's a risk it's not taking into consideration human nature, what we actually need emotionally, how we interact with other people and with AI agents,” Petcu says. “We think it's important that we integrate this social intelligence in AI solutions.
+
+“There is a differentiation between emotions and behaviours. And that's crucial for actually applying this technology successfully. It's very difficult to know what you feel inside. However, what we can do with the technology is observe behaviour.”

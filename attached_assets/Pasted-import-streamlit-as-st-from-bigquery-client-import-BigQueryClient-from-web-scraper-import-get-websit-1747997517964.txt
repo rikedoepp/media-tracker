@@ -1,0 +1,87 @@
+import streamlit as st
+from bigquery_client import BigQueryClient
+from web_scraper import get_website_text_content, extract_domain_from_url
+from datetime import datetime
+
+def main():
+    st.title("📰 Smart Media Tracker")
+
+    try:
+        bq_client = BigQueryClient()
+        st.success("✅ Connected to BigQuery")
+    except Exception as e:
+        st.error(f"❌ BigQuery connection failed: {e}")
+        return
+
+    st.subheader("Step 1: Extract Article Data")
+    url = st.text_input("Enter article URL:")
+    scrape_clicked = st.button("🔍 Scrape Article")
+
+    if scrape_clicked:
+        if not url:
+            st.error("❌ Please enter a URL")
+        else:
+            with st.spinner("Extracting content..."):
+                content = get_website_text_content(url)
+                domain = extract_domain_from_url(url)
+                st.session_state.scraped_data = {
+                    'url': url,
+                    'content': content or '',
+                    'domain': domain,
+                    'publish_date': datetime.now().strftime('%Y-%m-%d')
+                }
+                st.success("✅ Scraping complete" if content else "⚠️ Scraping failed — you can enter content manually")
+                st.rerun()
+
+    if 'scraped_data' in st.session_state:
+        st.markdown("---")
+        st.subheader("Step 2: Review & Submit")
+
+        data = st.session_state.scraped_data
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write(f"**URL:** {data['url']}")
+            st.write(f"**Domain:** {data['domain']}")
+            st.write(f"**Publish Date:** {data['publish_date']}")
+        with col2:
+            st.write(f"**Content Preview:** {data['content'][:200]}..." if data['content'] else "No content extracted")
+
+        publish_date = st.date_input("Publish Date", value=datetime.strptime(data['publish_date'], '%Y-%m-%d').date())
+        spokesperson = st.text_input("Spokesperson (optional)")
+        portfolio_company = st.text_input("Portfolio Company (optional)")
+
+        st.subheader("Article Content")
+        content = st.text_area("Edit or paste article content", value=data['content'], height=200)
+
+        if st.button("💾 Save to BigQuery", type="primary"):
+            if not data['url'].strip() or not content.strip():
+                st.error("❌ URL and content are required")
+                return
+
+            record_data = {
+                'url': data['url'],
+                'content': content,
+                'domain': data['domain'],
+                'publish_date': publish_date.strftime('%Y-%m-%d %H:%M:%S'),
+                'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'matched_spokespeople': spokesperson or '',
+                'matched_portcos': portfolio_company or '',
+                'matched_reporter': '',
+                'tagged_antler': bool(portfolio_company),
+                'language': 'en',
+                'backlinks': 0.0,
+                'matched_portco_location': '',
+                'matched_portco_deal_lead': '',
+            }
+
+            with st.spinner("Saving to BigQuery..."):
+                success = bq_client.insert_media_record(record_data)
+                if success:
+                    st.success("✅ Saved to BigQuery!")
+                    del st.session_state.scraped_data
+                    st.rerun()
+                else:
+                    st.error("❌ Failed to save")
+
+if __name__ == "__main__":
+    main()

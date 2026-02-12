@@ -1,0 +1,324 @@
+[
+  {
+    "name": "id",
+    "mode": "",
+    "type": "INTEGER",
+    "description": "Unique identifier for the media entry.",
+    "fields": []
+  },
+  {
+    "name": "updated_at",
+    "mode": "",
+    "type": "TIMESTAMP",
+    "description": "The date and time the media entry was last updated.",
+    "fields": []
+  },
+  {
+    "name": "publish_date",
+    "mode": "",
+    "type": "TIMESTAMP",
+    "description": "The date and time the media was published.",
+    "fields": []
+  },
+  {
+    "name": "url",
+    "mode": "",
+    "type": "STRING",
+    "description": "The URL of the media article.",
+    "fields": []
+  },
+  {
+    "name": "title",
+    "mode": "",
+    "type": "STRING",
+    "description": "The title of the media article.",
+    "fields": []
+  },
+  {
+    "name": "domain",
+    "mode": "",
+    "type": "STRING",
+    "description": "The domain name of the website where the media was published.",
+    "fields": []
+  },
+  {
+    "name": "country",
+    "mode": "",
+    "type": "STRING",
+    "description": "The country where the media was published.",
+    "fields": []
+  },
+  {
+    "name": "content",
+    "mode": "",
+    "type": "STRING",
+    "description": "The full text content of the media article.",
+    "fields": []
+  },
+  {
+    "name": "matched_spokespeople",
+    "mode": "",
+    "type": "STRING",
+    "description": "Spokespeople mentioned in the media.",
+    "fields": []
+  },
+  {
+    "name": "spokespeople_in_headline",
+    "mode": "",
+    "type": "BOOLEAN",
+    "description": "Indicates whether spokespeople are mentioned in the headline.",
+    "fields": []
+  },
+  {
+    "name": "matched_vc_investors",
+    "mode": "",
+    "type": "STRING",
+    "description": "Venture capital investors mentioned in the media.",
+    "fields": []
+  },
+  {
+    "name": "matched_dealroom_rank",
+    "mode": "",
+    "type": "STRING",
+    "description": "Dealroom rank of the mentioned company.",
+    "fields": []
+  },
+  {
+    "name": "matched_reporter",
+    "mode": "",
+    "type": "STRING",
+    "description": "Reporters mentioned in the media.",
+    "fields": []
+  },
+  {
+    "name": "matched_portcos",
+    "mode": "",
+    "type": "STRING",
+    "description": "Portfolio companies mentioned in the media.",
+    "fields": []
+  },
+  {
+    "name": "tagged_antler",
+    "mode": "",
+    "type": "BOOLEAN",
+    "description": "Indicates whether the media is tagged as related to Antler.",
+    "fields": []
+  },
+  {
+    "name": "language",
+    "mode": "",
+    "type": "STRING",
+    "description": "The language of the media article.",
+    "fields": []
+  },
+  {
+    "name": "matched_portco_location",
+    "mode": "",
+    "type": "STRING",
+    "description": "Location of portfolio companies mentioned in the media.",
+    "fields": []
+  },
+  {
+    "name": "matched_portco_deal_lead",
+    "mode": "",
+    "type": "STRING",
+    "description": "Deal leads of portfolio companies mentioned in the media.",
+    "fields": []
+  },
+  {
+    "name": "matched_portco_ai",
+    "mode": "",
+    "type": "STRING",
+    "description": "AI-identified portfolio companies mentioned in the media.",
+    "fields": []
+  },
+  {
+    "name": "managed_by_fund",
+    "mode": "",
+    "type": "STRING",
+    "description": "Funds that manage the mentioned portfolio company.",
+    "fields": []
+  },
+  {
+    "name": "backlinks",
+    "mode": "",
+    "type": "FLOAT",
+    "description": "The number of backlinks to the media article.",
+    "fields": []
+  },
+  {
+    "name": "page_rank",
+    "mode": "",
+    "type": "INTEGER",
+    "description": "The page rank of the website where the media was published.",
+    "fields": []
+  },
+  {
+    "name": "tier",
+    "mode": "",
+    "type": "STRING",
+    "description": "The tier of the media source.",
+    "fields": []
+  },
+  {
+    "name": "kill_pill",
+    "mode": "",
+    "type": "BOOLEAN",
+    "description": "Indicates whether the media is considered a kill pill.",
+    "fields": []
+  },
+  {
+    "name": "kill_pill_context",
+    "mode": "",
+    "type": "STRING",
+    "description": "Contextual information related to the kill pill status.",
+    "fields": []
+  },
+  {
+    "name": "kill_pill_count",
+    "mode": "",
+    "type": "INTEGER",
+    "description": "The number of times a kill pill context is identified.",
+    "fields": []
+  },
+  {
+    "name": "unwanted",
+    "mode": "",
+    "type": "BOOLEAN",
+    "description": "Indicates whether the media is considered unwanted.",
+    "fields": []
+  },
+  {
+    "name": "unwanted_context",
+    "mode": "",
+    "type": "STRING",
+    "description": "Contextual information related to unwanted status.",
+    "fields": []
+  },
+  {
+    "name": "unwanted_count",
+    "mode": "",
+    "type": "INTEGER",
+    "description": "The number of times an unwanted context is identified.",
+    "fields": []
+  },
+  {
+    "name": "antler_in_headline",
+    "mode": "",
+    "type": "BOOLEAN",
+    "description": "Indicates whether Antler is mentioned in the headline.",
+    "fields": []
+  },
+  {
+    "name": "cleaned_url",
+    "mode": "",
+    "type": "STRING",
+    "description": "The cleaned and standardized URL of the media article.",
+    "fields": []
+  },
+  {
+    "name": "social_shares_count",
+    "mode": "",
+    "type": "INTEGER",
+    "description": "The number of social shares of the media article.",
+    "fields": []
+  },
+  {
+    "name": "syften_progress",
+    "mode": "",
+    "type": "STRING",
+    "description": "The progress of the media processing in Syften.",
+    "fields": []
+  },
+  {
+    "name": "syften_batch",
+    "mode": "",
+    "type": "STRING",
+    "description": "The Syften batch the media was processed in.",
+    "fields": []
+  },
+  {
+    "name": "tagged_portco",
+    "mode": "",
+    "type": "BOOLEAN",
+    "description": "Indicates whether the media is tagged as related to a portfolio company.",
+    "fields": []
+  },
+  {
+    "name": "social_followers",
+    "mode": "",
+    "type": "INTEGER",
+    "description": "The number of social media followers of the media source.",
+    "fields": []
+  },
+  {
+    "name": "month",
+    "mode": "",
+    "type": "DATE",
+    "description": "The month the media was published.",
+    "fields": []
+  },
+  {
+    "name": "unbranded_win",
+    "mode": "",
+    "type": "BOOLEAN",
+    "description": "Indicates whether the media is an unbranded win.",
+    "fields": []
+  },
+  {
+    "name": "summary",
+    "mode": "",
+    "type": "STRING",
+    "description": "A brief summary of the media article.",
+    "fields": []
+  },
+  {
+    "name": "li_summary",
+    "mode": "",
+    "type": "STRING",
+    "description": "Summary of the article from LinkedIn.",
+    "fields": []
+  },
+  {
+    "name": "wa_summary",
+    "mode": "",
+    "type": "STRING",
+    "description": "Summary of the article from Web Archive.",
+    "fields": []
+  },
+  {
+    "name": "text_scraped",
+    "mode": "",
+    "type": "BOOLEAN",
+    "description": "",
+    "fields": []
+  },
+  {
+    "name": "text_scraped_at",
+    "mode": "",
+    "type": "TIMESTAMP",
+    "description": "",
+    "fields": []
+  },
+  {
+    "name": "text_scrape_error",
+    "mode": "",
+    "type": "STRING",
+    "description": "",
+    "fields": []
+  },
+  {
+    "name": "data_ingestion",
+    "mode": "NULLABLE",
+    "type": "BOOLEAN",
+    "description": "True if row was added via Data ingestion feature",
+    "fields": []
+  },
+  {
+    "name": "matched_vehicle",
+    "mode": "NULLABLE",
+    "type": "STRING",
+    "description": "",
+    "fields": []
+  }
+]

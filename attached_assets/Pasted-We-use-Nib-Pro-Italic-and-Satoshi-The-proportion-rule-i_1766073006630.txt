@@ -1,0 +1,57 @@
+We use Nib Pro Italic and Satoshi
+The proportion rule is the following: The right font size for Nib Pro is determined by the formula x*0,95—where x is the size of Satoshi.
+Weights:
+Eyebrow / Satoshi Variable Medium
+Left aligned AG Uppercase
+Aa 16pt
+A 112% | A 0%
+H1 / Satoshi Variable Regular + Nib Pro Italic
+Left aligned Ag Uppercase
+Aa 60pt
+A 97.5% | A -1%
+H2 / Satoshi Variable Regular + Nib Pro Italic
+Left aligned Ag Sentence Case
+Aa Satoshi = 33pt | Nib Pro = 33 * 0,95 = 31pt
+A 110% | A 0%
+Body Text / Satoshi Variable Regular
+Left aligned Ag Sentence Case
+Aa 16pt
+A 110% | A 0%
+Graphs, Index, Bullets / Satoshi Variable Regular
+Left aligned Ag Sentence Case
+Aa 13pt
+A 140% | A 0%
+
+
+Graphics
+
+For simple graphs with up to three values, we use primary and secondary colors, unless the graphs are related to financial data, in which case we must use only secondary colors (unless we use red to show negative performance).
+We introduce our tertiary colors when graphs related to financial data have more than three values, or graphs not related with financial data have more than six values.
+Primary
+Antler Red — ED4746
+Cherry — C9102F
+Burgundy — 46061D
+Black — 1C1A1A
+Light Pink — FFE1E1
+Pink — FFB5B5
+White — FFFFFF
+Secondary
+Dark Teal — 132E31
+Mint Green — BADED8
+Teal — 297C85
+Tertiary
+Green — 27D3AA
+Blue — 1197D0
+Dark Blue — 126386
+
+Sorted into normal, logical text
+Color usage rules
+For simple graphs with up to three values, use primary and secondary colors.
+If the graph is related to financial data, use only secondary colors, except when red is needed to indicate negative performance.
+Use tertiary colors when:
+Financial-data graphs have more than three values.
+Non-financial graphs have more than six values.
+Color palette
+Primary colors: Antler Red (ED4746), Cherry (C9102F), Burgundy (46061D), Black (1C1A1A), Light Pink (FFE1E1), Pink (FFB5B5), White (FFFFFF).
+Secondary colors: Dark Teal (132E31), Mint Green (BADED8), Teal (297C85).
+Tertiary colors: Green (27D3AA), Blue (1197D0), Dark Blue (126386).
